@@ -26,26 +26,19 @@
   Options:
     :name     - keyword, unique resolver name
     :input    - vector of keywords this resolver requires
-    :output   - vector of keywords (or nested maps) this resolver provides
+    :output   - vector of flat keywords this resolver provides
     :resolve  - (fn [env input-map] output-map)"
   [{:keys [name input output resolve] :as opts}]
   (when-not name
     (throw (ex-info "Resolver must have a :name" {:resolver opts})))
   (when-not resolve
     (throw (ex-info "Resolver must have a :resolve function" {:resolver opts})))
+  (when (some map? output)
+    (throw (ex-info "Resolver :output must be flat keywords, not nested maps"
+                    {:resolver name :output output})))
   (assoc opts
          :input  (or input [])
          :output (or output [])))
-
-(defn- flatten-output-keys
-  "Extract the top-level attribute keys from an output declaration.
-  Output items can be plain keywords or single-entry maps (for joins)."
-  [output]
-  (mapv (fn [item]
-          (if (map? item)
-            (ffirst item)
-            item))
-        output))
 
 (defn build-index
   "Build an index from a collection of resolvers.
@@ -56,11 +49,10 @@
   (let [resolvers (mapv (fn [r] (if (:resolve r) r (resolver r))) resolvers)]
     {:resolvers-by-output
      (reduce (fn [idx r]
-               (let [out-keys (flatten-output-keys (:output r))]
-                 (reduce (fn [idx k]
-                           (update idx k (fnil conj []) r))
-                         idx
-                         out-keys)))
+               (reduce (fn [idx k]
+                         (update idx k (fnil conj []) r))
+                       idx
+                       (:output r)))
              {}
              resolvers)
      :all-resolvers resolvers}))
@@ -77,19 +69,19 @@
   [index attr]
   (get-in index [:resolvers-by-output attr]))
 
-(defn- output-spec-for-attr
-  "Given a resolver's output declaration, find the nested spec for `attr`.
-  Returns nil for plain attributes, or the nested query vector for joins."
-  [output attr]
-  (some (fn [item]
-          (when (and (map? item) (contains? item attr))
-            (get item attr)))
-        output))
-
 (defn- input-item-key
   "Extract the top-level key from an input item (keyword or join map)."
   [input-item]
   (if (map? input-item) (ffirst input-item) input-item))
+
+(defn- ensure-join-value
+  "Validate that a value is suitable for a join (map or sequential of maps).
+  Throws if the value is nil or a scalar."
+  [v attr context]
+  (when (or (nil? v) (not (or (map? v) (sequential? v))))
+    (throw (ex-info (str "Expected a map or collection for join on " attr
+                         ", but got: " (pr-str v))
+                    {:attr attr :value v :context context}))))
 
 (defn- resolve-input-map
   "Resolve all required inputs and build the (possibly nested) input map.
@@ -109,14 +101,14 @@
     (reduce
      (fn [result input-item]
        (if (map? input-item)
-         (let [attr     (ffirst input-item)
+         (let [attr      (ffirst input-item)
                sub-input (val (first input-item))
-               v        (get enriched attr)]
+               v         (get enriched attr)]
+           (ensure-join-value v attr :input)
            (assoc result attr
-                  (cond
-                    (map? v)        (resolve-input-map env index v sub-input resolving)
-                    (sequential? v) (mapv #(resolve-input-map env index % sub-input resolving) v)
-                    :else           v)))
+                  (if (map? v)
+                    (resolve-input-map env index v sub-input resolving)
+                    (mapv #(resolve-input-map env index % sub-input resolving) v))))
          (assoc result input-item (get enriched input-item))))
      {}
      input)))
@@ -129,10 +121,11 @@
     ;; Already present — but if there's a sub-query we need to process children
     (let [v (get entity attr)]
       (if sub-query
-        (cond
-          (map? v)        (process-query env index v sub-query)
-          (sequential? v) (mapv #(process-query env index % sub-query) v)
-          :else           v)
+        (do
+          (ensure-join-value v attr :query)
+          (if (map? v)
+            (process-query env index v sub-query)
+            (mapv #(process-query env index % sub-query) v)))
         v))
     ;; Cycle detection
     (if (contains? resolving attr)
@@ -140,24 +133,25 @@
                       {:attr attr :resolving resolving}))
       (let [resolving (conj resolving attr)
             candidates (find-resolver-candidates index attr)
-            ;; Try each candidate; pick the first one whose inputs we can satisfy
+            ;; Try each candidate; pick the first one whose return contains the key
             resolved (some
                       (fn [r]
                         (try
                           (let [input-map (resolve-input-map env index entity (:input r) resolving)
-                                result ((:resolve r) env input-map)
-                                v (get result attr)]
-                            {:value v})
+                                result ((:resolve r) env input-map)]
+                            (when (contains? result attr)
+                              {:value (get result attr)}))
                           (catch clojure.lang.ExceptionInfo _e
                             nil)))
                       candidates)]
         (if resolved
           (let [v (:value resolved)]
-            (if (and sub-query v)
-              (cond
-                (map? v)        (process-query env index v sub-query)
-                (sequential? v) (mapv #(process-query env index % sub-query) v)
-                :else           v)
+            (if sub-query
+              (do
+                (ensure-join-value v attr :query)
+                (if (map? v)
+                  (process-query env index v sub-query)
+                  (mapv #(process-query env index % sub-query) v)))
               v))
           (throw (ex-info (str "No resolver found for attribute " attr
                                " with available inputs " (keys entity))
