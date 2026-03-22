@@ -1,6 +1,6 @@
 (ns com.biffweb.pathom-lite-demo
-  "A small web demo for pathom-lite. Run with: clojure -M -m com.biffweb.pathom-lite-demo"
-  (:require [com.biffweb.pathom-lite :as pl]
+  "A small web demo for com.biffweb.pathom-lite. Run with: clojure -M -m com.biffweb.pathom-lite-demo"
+  (:require [com.biffweb.pathom-lite :as biff.pl]
             [clojure.string :as str]
             [clojure.edn :as edn])
   (:import [com.sun.net.httpserver HttpServer HttpHandler]
@@ -21,66 +21,56 @@
    2 [1]
    3 [1 2]})
 
-(def user-by-id
-  (pl/resolver
-   {:name    :user-by-id
-    :input   [:user/id]
-    :output  [:user/name :user/email :user/age]
-    :resolve (fn [_env {:user/keys [id]}]
-               (or (get users-db id)
-                   (throw (ex-info "User not found" {:user/id id}))))}))
+(defn user-by-id
+  {:input  [:user/id]
+   :output [:user/name :user/email :user/age]}
+  [_ctx {:user/keys [id]}]
+  (or (get users-db id)
+      (throw (ex-info "User not found" {:user/id id}))))
 
-(def user-friends
-  (pl/resolver
-   {:name    :user-friends
-    :input   [:user/id]
-    :output  [:user/friends]
-    :resolve (fn [_env {:user/keys [id]}]
-               {:user/friends (mapv (fn [fid] {:user/id fid})
-                                    (get friends-db id []))})}))
+(defn user-friends
+  {:input  [:user/id]
+   :output [:user/friends]}
+  [_ctx {:user/keys [id]}]
+  {:user/friends (mapv (fn [fid] {:user/id fid})
+                       (get friends-db id []))})
 
-(def user-greeting
-  (pl/resolver
-   {:name    :user-greeting
-    :input   [:user/name :user/age]
-    :output  [:user/greeting]
-    :resolve (fn [_env {:user/keys [name age]}]
-               {:user/greeting (str "Hello, " name "! You are " age " years old.")})}))
+(defn user-greeting
+  {:input  [:user/name :user/age]
+   :output [:user/greeting]}
+  [_ctx {:user/keys [name age]}]
+  {:user/greeting (str "Hello, " name "! You are " age " years old.")})
 
-(def order-by-id
-  (pl/resolver
-   {:name    :order-by-id
-    :input   [:order/id]
-    :output  [:order/total :order/status :order/user]
-    :resolve (fn [_env {:order/keys [id]}]
-               (case id
-                 100 {:order/total 59.99 :order/status :shipped :order/user {:user/id 1}}
-                 101 {:order/total 12.50 :order/status :pending :order/user {:user/id 2}}
-                 (throw (ex-info "Order not found" {:order/id id}))))}))
+(defn order-by-id
+  {:input  [:order/id]
+   :output [:order/total :order/status :order/user]}
+  [_ctx {:order/keys [id]}]
+  (case id
+    100 {:order/total 59.99 :order/status :shipped :order/user {:user/id 1}}
+    101 {:order/total 12.50 :order/status :pending :order/user {:user/id 2}}
+    (throw (ex-info "Order not found" {:order/id id}))))
 
-(def user-address
-  (pl/resolver
-   {:name    :user-address
-    :input   [:user/id]
-    :output  [:user/address]
-    :resolve (fn [_env {:user/keys [id]}]
-               (case id
-                 1 {:user/address {:address/street "123 Main St" :address/zip "10001"}}
-                 2 {:user/address {:address/street "456 Oak Ave" :address/zip "90210"}}
-                 3 {:user/address {:address/street "789 Elm Rd"  :address/zip "60601"}}
-                 (throw (ex-info "Address not found" {:user/id id}))))}))
+(defn user-address
+  {:input  [:user/id]
+   :output [:user/address]}
+  [_ctx {:user/keys [id]}]
+  (case id
+    1 {:user/address {:address/street "123 Main St" :address/zip "10001"}}
+    2 {:user/address {:address/street "456 Oak Ave" :address/zip "90210"}}
+    3 {:user/address {:address/street "789 Elm Rd"  :address/zip "60601"}}
+    (throw (ex-info "Address not found" {:user/id id}))))
 
-(def shipping-label
-  (pl/resolver
-   {:name    :shipping-label
-    :input   [{:order/user [:user/name {:user/address [:address/zip]}]}]
-    :output  [:order/shipping-label]
-    :resolve (fn [_env input]
-               (let [user-name (get-in input [:order/user :user/name])
-                     zip       (get-in input [:order/user :user/address :address/zip])]
-                 {:order/shipping-label (str "Ship to: " user-name ", " zip)}))}))
+(defn shipping-label
+  {:input  [{:order/user [:user/name {:user/address [:address/zip]}]}]
+   :output [:order/shipping-label]}
+  [_ctx input]
+  (let [user-name (get-in input [:order/user :user/name])
+        zip       (get-in input [:order/user :user/address :address/zip])]
+    {:order/shipping-label (str "Ship to: " user-name ", " zip)}))
 
-(def demo-resolvers [user-by-id user-friends user-greeting order-by-id user-address shipping-label])
+(def demo-index
+  (biff.pl/build-index [#'user-by-id #'user-friends #'user-greeting
+                         #'order-by-id #'user-address #'shipping-label]))
 
 ;; ---------------------------------------------------------------------------
 ;; HTML
@@ -102,6 +92,9 @@
    {:label "Nested input (shipping label)"
     :entity "{:order/id 100}"
     :query "[:order/shipping-label]"}
+   {:label "Optional query item"
+    :entity "{:user/id 1}"
+    :query "[:user/name [:? :nonexistent/attr]]"}
    {:label "Multiple attributes"
     :entity "{:user/id 3}"
     :query "[:user/name :user/age :user/email]"}])
@@ -146,11 +139,11 @@
    "<div class='card'>
   <h3>Available Resolvers</h3>
   <ul>
-    <li><b>:user-by-id</b> — <code>[:user/id]</code> → <code>[:user/name :user/email :user/age]</code></li>
-    <li><b>:user-friends</b> — <code>[:user/id]</code> → <code>[:user/friends]</code></li>
-    <li><b>:user-greeting</b> — <code>[:user/name :user/age]</code> → <code>[:user/greeting]</code> (derived, chains through user-by-id)</li>
-    <li><b>:user-address</b> — <code>[:user/id]</code> → <code>[:user/address]</code></li>
-    <li><b>:shipping-label</b> — <code>[{:order/user [:user/name {:user/address [:address/zip]}]}]</code> → <code>[:order/shipping-label]</code> (nested input!)</li>
+    <li><b>user-by-id</b> — <code>[:user/id]</code> → <code>[:user/name :user/email :user/age]</code></li>
+    <li><b>user-friends</b> — <code>[:user/id]</code> → <code>[:user/friends]</code></li>
+    <li><b>user-greeting</b> — <code>[:user/name :user/age]</code> → <code>[:user/greeting]</code> (derived, chains through user-by-id)</li>
+    <li><b>user-address</b> — <code>[:user/id]</code> → <code>[:user/address]</code></li>
+    <li><b>shipping-label</b> — <code>[{:order/user [:user/name {:user/address [:address/zip]}]}]</code> → <code>[:order/shipping-label]</code> (nested input!)</li>
   </ul>
   <h3>Orders in DB</h3>
   <ul>
@@ -182,9 +175,9 @@
   (try
     (let [entity (edn/read-string entity-str)
           query  (edn/read-string query-str)
-          result (pl/process {:resolvers demo-resolvers
-                              :entity    entity
-                              :query     query})]
+          result (biff.pl/query {:biff.pathom-lite/index demo-index}
+                                entity
+                                query)]
       (str "<pre>" (pr-str result) "</pre>"))
     (catch Exception e
       (str "<pre style='color:#ef476f;background:#2b2d42'>"
@@ -199,7 +192,7 @@
     (cond
       (and (= method "GET") (or (= path "/") (= path "")))
       (let [body (.getBytes (html-page nil nil nil) "UTF-8")]
-        (.getResponseHeaders exchange) ;; no-op to ensure headers exist
+        (.getResponseHeaders exchange)
         (.sendResponseHeaders exchange 200 (count body))
         (with-open [os (.getResponseBody exchange)]
           (.write os body)))

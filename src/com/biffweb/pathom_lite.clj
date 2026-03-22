@@ -5,7 +5,10 @@
   - Simple resolvers with declared input/output
   - Nested queries (joins)
   - Nested inputs (resolvers that require sub-attributes of their inputs)
+  - Optional inputs ([:? :key] syntax)
+  - Optional query items ([:? :key] in query vectors)
   - Global resolvers (no input)
+  - Var-based resolvers (metadata-driven)
   - Strict mode only (throws on missing data)
 
   Omits (compared to pathom3):
@@ -13,40 +16,104 @@
   - Lenient mode
   - Batch resolvers
   - Query planning (uses query directly)
-  - EQL AST manipulation
-  - Optional resolvers")
+  - EQL AST manipulation")
+
+;; ---------------------------------------------------------------------------
+;; Input helpers
+;; ---------------------------------------------------------------------------
+
+(defn- optional-input?
+  "Returns true if input-item is an optional input marker [:? ...]."
+  [input-item]
+  (and (vector? input-item)
+       (= :? (first input-item))))
+
+(defn- unwrap-optional
+  "Given an optional input marker [:? x], returns x."
+  [input-item]
+  (second input-item))
+
+(defn- input-item-key
+  "Extract the top-level key from an input item (keyword, join map, or optional wrapper)."
+  [input-item]
+  (cond
+    (optional-input? input-item) (input-item-key (unwrap-optional input-item))
+    (map? input-item) (let [k (ffirst input-item)]
+                        (if (optional-input? k)
+                          (input-item-key (unwrap-optional k))
+                          k))
+    :else input-item))
+
+(defn- input-item-optional?
+  "Returns true if the input item is optional (either [:? :key] or {[:? :key] [...]})."
+  [input-item]
+  (or (optional-input? input-item)
+      (and (map? input-item)
+           (optional-input? (ffirst input-item)))))
+
+(defn- normalize-input-item
+  "Unwrap optional markers from an input item for processing.
+  E.g. [:? :foo] -> :foo, {[:? :bar] [...]} -> {:bar [...]}"
+  [input-item]
+  (cond
+    (optional-input? input-item) (unwrap-optional input-item)
+    (and (map? input-item) (optional-input? (ffirst input-item)))
+    {(unwrap-optional (ffirst input-item)) (val (first input-item))}
+    :else input-item))
 
 ;; ---------------------------------------------------------------------------
 ;; Registry helpers
 ;; ---------------------------------------------------------------------------
 
 (defn resolver
-  "Define a resolver. Returns a resolver map.
+  "Define a resolver. Accepts either a map or a var.
 
-  Options:
-    :name     - keyword, unique resolver name
-    :input    - vector of keywords this resolver requires
-    :output   - vector of flat keywords this resolver provides
-    :resolve  - (fn [env input-map] output-map)"
-  [{:keys [name input output resolve] :as opts}]
-  (when-not name
-    (throw (ex-info "Resolver must have a :name" {:resolver opts})))
-  (when-not resolve
-    (throw (ex-info "Resolver must have a :resolve function" {:resolver opts})))
-  (when (some map? output)
-    (throw (ex-info "Resolver :output must be flat keywords, not nested maps"
-                    {:resolver name :output output})))
-  (assoc opts
-         :input  (or input [])
-         :output (or output [])))
+  When given a var:
+  - Uses var metadata for :input and :output
+  - Derives :id from the var's namespace and name
+  - Stores the var itself (not the deref'd fn) as :resolve
+
+  When given a map, expects:
+    :id      - keyword, unique resolver id
+    :input   - vector of input specs (keywords, join maps, or optional wrappers)
+    :output  - vector of flat keywords this resolver provides
+    :resolve - (fn [ctx input-map] output-map)
+
+  Returns a resolver map with keys :id, :input, :output, :resolve."
+  [resolver-or-map]
+  (if (var? resolver-or-map)
+    (let [var-meta (meta resolver-or-map)
+          id (keyword (str (:ns var-meta)) (str (:name var-meta)))
+          input (or (:input var-meta) [])
+          output (or (:output var-meta) [])]
+      (when (some map? output)
+        (throw (ex-info "Resolver :output must be flat keywords, not nested maps"
+                        {:resolver id :output output})))
+      {:id id
+       :input input
+       :output output
+       :resolve resolver-or-map})
+    (let [{:keys [id input output resolve]} resolver-or-map]
+      (when-not id
+        (throw (ex-info "Resolver must have an :id" {:resolver resolver-or-map})))
+      (when-not resolve
+        (throw (ex-info "Resolver must have a :resolve function" {:resolver resolver-or-map})))
+      (when (some map? output)
+        (throw (ex-info "Resolver :output must be flat keywords, not nested maps"
+                        {:resolver id :output output})))
+      {:id id
+       :input (or input [])
+       :output (or output [])
+       :resolve resolve})))
 
 (defn build-index
-  "Build an index from a collection of resolvers.
+  "Build an index from a collection of resolvers (maps or vars).
+  Calls `resolver` on each item.
   Returns a map with:
     :resolvers-by-output  {attr-key [resolver ...]}
     :all-resolvers        [resolver ...]"
   [resolvers]
-  (let [resolvers (mapv (fn [r] (if (:resolve r) r (resolver r))) resolvers)]
+  (let [resolvers (mapv resolver resolvers)]
     {:resolvers-by-output
      (reduce (fn [idx r]
                (reduce (fn [idx k]
@@ -62,17 +129,13 @@
 ;; ---------------------------------------------------------------------------
 
 (declare process-query)
-(declare ^:private resolve-attr)
+(declare ^:private resolve-value)
+(declare ^:private resolve-input-map)
 
 (defn- find-resolver-candidates
   "Find all resolvers that can provide `attr`."
-  [index attr]
-  (get-in index [:resolvers-by-output attr]))
-
-(defn- input-item-key
-  "Extract the top-level key from an input item (keyword or join map)."
-  [input-item]
-  (if (map? input-item) (ffirst input-item) input-item))
+  [ctx attr]
+  (get-in (:biff.pathom-lite/index ctx) [:resolvers-by-output attr]))
 
 (defn- ensure-join-value
   "Validate that a value is suitable for a join (map or sequential of maps).
@@ -83,112 +146,143 @@
                          ", but got: " (pr-str v))
                     {:attr attr :value v :context context}))))
 
-(defn- resolve-input-map
-  "Resolve all required inputs and build the (possibly nested) input map.
-  Handles both flat keyword inputs and nested join inputs like
-  [{:order/user [:user/name]}]."
-  [env index entity input resolving]
-  ;; First pass: ensure all top-level keys are resolved in the entity
-  (let [enriched (reduce
-                  (fn [ent input-item]
-                    (let [k (input-item-key input-item)]
-                      (if (contains? ent k)
-                        ent
-                        (assoc ent k (resolve-attr env index ent k nil resolving)))))
-                  entity
-                  input)]
-    ;; Second pass: build the input map with proper nesting
-    (reduce
-     (fn [result input-item]
-       (if (map? input-item)
-         (let [attr      (ffirst input-item)
-               sub-input (val (first input-item))
-               v         (get enriched attr)]
-           (ensure-join-value v attr :input)
-           (assoc result attr
-                  (if (map? v)
-                    (resolve-input-map env index v sub-input resolving)
-                    (mapv #(resolve-input-map env index % sub-input resolving) v))))
-         (assoc result input-item (get enriched input-item))))
-     {}
-     input)))
+(defn- apply-sub-query
+  "Apply a sub-query to a resolved value. The value must be a map or collection of maps."
+  [ctx v attr sub-query]
+  (ensure-join-value v attr :query)
+  (if (map? v)
+    (process-query ctx v sub-query)
+    (mapv #(process-query ctx % sub-query) v)))
+
+(defn- resolve-value
+  "Resolve a raw value for attr from resolver candidates (not from entity).
+  `resolving` is a set of attrs currently being resolved (cycle detection).
+  Throws with ::resolve-error on ex-data if resolution fails."
+  [ctx entity attr resolving]
+  (if (contains? resolving attr)
+    (throw (ex-info (str "Cycle detected while resolving " attr)
+                    {::resolve-error true :attr attr :resolving resolving}))
+    (let [resolving (conj resolving attr)
+          candidates (find-resolver-candidates ctx attr)
+          resolved (some
+                    (fn [r]
+                      (try
+                        (let [input-map (resolve-input-map ctx entity (:input r) resolving)
+                              result ((:resolve r) ctx input-map)]
+                          (when (contains? result attr)
+                            {:value (get result attr)}))
+                        (catch clojure.lang.ExceptionInfo e
+                          (if (::resolve-error (ex-data e))
+                            nil
+                            (throw e)))))
+                    candidates)]
+      (if resolved
+        (:value resolved)
+        (throw (ex-info (str "No resolver found for attribute " attr
+                             " with available inputs " (keys entity))
+                        {::resolve-error true :attr attr :available-keys (keys entity)}))))))
 
 (defn- resolve-attr
-  "Resolve a single attribute (possibly a join) for the given entity.
-  `resolving` is a set of attrs currently being resolved (cycle detection)."
-  [env index entity attr sub-query resolving]
-  (if (contains? entity attr)
-    ;; Already present — but if there's a sub-query we need to process children
-    (let [v (get entity attr)]
-      (if sub-query
-        (do
-          (ensure-join-value v attr :query)
-          (if (map? v)
-            (process-query env index v sub-query)
-            (mapv #(process-query env index % sub-query) v)))
-        v))
-    ;; Cycle detection
-    (if (contains? resolving attr)
-      (throw (ex-info (str "Cycle detected while resolving " attr)
-                      {:attr attr :resolving resolving}))
-      (let [resolving (conj resolving attr)
-            candidates (find-resolver-candidates index attr)
-            ;; Try each candidate; pick the first one whose return contains the key
-            resolved (some
-                      (fn [r]
-                        (try
-                          (let [input-map (resolve-input-map env index entity (:input r) resolving)
-                                result ((:resolve r) env input-map)]
-                            (when (contains? result attr)
-                              {:value (get result attr)}))
-                          (catch clojure.lang.ExceptionInfo _e
-                            nil)))
-                      candidates)]
-        (if resolved
-          (let [v (:value resolved)]
-            (if sub-query
-              (do
-                (ensure-join-value v attr :query)
-                (if (map? v)
-                  (process-query env index v sub-query)
-                  (mapv #(process-query env index % sub-query) v)))
-              v))
-          (throw (ex-info (str "No resolver found for attribute " attr
-                               " with available inputs " (keys entity))
-                          {:attr attr :available-keys (keys entity)})))))))
+  "Resolve a single attribute for the given entity, optionally applying a sub-query.
+  First gets the raw value (from entity or resolvers), then applies sub-query if present."
+  [ctx entity attr sub-query resolving]
+  (let [v (if (contains? entity attr)
+            (get entity attr)
+            (resolve-value ctx entity attr resolving))]
+    (if sub-query
+      (apply-sub-query ctx v attr sub-query)
+      v)))
+
+(defn- resolve-input-map
+  "Resolve all required inputs and build the input map in a single pass.
+  For each input item: resolves the key if missing, then handles sub-inputs."
+  [ctx entity input resolving]
+  (reduce
+   (fn [result input-item]
+     (let [optional? (input-item-optional? input-item)
+           normalized (normalize-input-item input-item)
+           [k sub-input] (if (map? normalized)
+                           [(ffirst normalized) (val (first normalized))]
+                           [normalized nil])
+           resolve-item
+           (fn []
+             (let [raw (if (contains? entity k)
+                         (get entity k)
+                         (resolve-value ctx entity k resolving))]
+               (if sub-input
+                 (do (ensure-join-value raw k :input)
+                     (if (map? raw)
+                       (resolve-input-map ctx raw sub-input resolving)
+                       (mapv #(resolve-input-map ctx % sub-input resolving) raw)))
+                 raw)))]
+       (if optional?
+         (try
+           (assoc result k (resolve-item))
+           (catch clojure.lang.ExceptionInfo e
+             (if (::resolve-error (ex-data e))
+               result
+               (throw e))))
+         (assoc result k (resolve-item)))))
+   {}
+   input))
+
+(defn- normalize-query-item
+  "Unwrap optional markers from a query item.
+  Returns [attr sub-query optional?]."
+  [query-item]
+  (cond
+    ;; [:? :keyword] or [:? {:keyword [...]}]
+    (optional-input? query-item)
+    (let [inner (unwrap-optional query-item)
+          [attr sub-query _] (normalize-query-item inner)]
+      [attr sub-query true])
+
+    ;; {[:? :keyword] [...]} — optional join
+    (and (map? query-item) (optional-input? (ffirst query-item)))
+    [(unwrap-optional (ffirst query-item)) (val (first query-item)) true]
+
+    ;; {:keyword [...]} — regular join
+    (map? query-item)
+    [(ffirst query-item) (val (first query-item)) false]
+
+    ;; :keyword — plain attribute
+    :else
+    [query-item nil false]))
 
 (defn- process-query
   "Process an EQL query against the given entity using the resolver index.
+  Supports optional query items via [:? ...] syntax.
   Returns a map of the requested attributes."
-  [env index entity query]
+  [ctx entity query-vec]
   (reduce
    (fn [result query-item]
-     (let [[attr sub-query] (if (map? query-item)
-                              [(ffirst query-item) (val (first query-item))]
-                              [query-item nil])
-           ;; Merge already-resolved data into entity so subsequent resolvers
-           ;; can use attributes resolved earlier in this query.
-           enriched-entity (merge entity result)
-           v (resolve-attr env index enriched-entity attr sub-query #{})]
-       (assoc result attr v)))
+     (let [[attr sub-query optional?] (normalize-query-item query-item)
+           enriched-entity (merge entity result)]
+       (if optional?
+         (try
+           (assoc result attr (resolve-attr ctx enriched-entity attr sub-query #{}))
+           (catch clojure.lang.ExceptionInfo e
+             (if (::resolve-error (ex-data e))
+               result
+               (throw e))))
+         (assoc result attr (resolve-attr ctx enriched-entity attr sub-query #{})))))
    {}
-   query))
+   query-vec))
 
 ;; ---------------------------------------------------------------------------
 ;; Public API
 ;; ---------------------------------------------------------------------------
 
-(defn process
-  "Run an EQL query using the provided resolvers.
+(defn query
+  "Run an EQL query using the provided resolver index.
 
-  Options:
-    :resolvers - collection of resolver maps (from `resolver`)
-    :query     - EQL query vector, e.g. [:user/name {:user/friends [:friend/name]}]
-    :entity    - (optional) initial entity map with seed data
-    :env       - (optional) environment map passed to resolver fns
+  Arguments:
+    ctx    - context map; must include :biff.pathom-lite/index (from build-index).
+             Any other keys are passed through to resolver functions.
+    entity - initial entity map with seed data (or {})
+    query  - EQL query vector, e.g. [:user/name {:user/friends [:user/name]}]
+             Supports optional items via [:? :attr] syntax.
 
   Returns a map satisfying the query."
-  [{:keys [resolvers query entity env]}]
-  (let [index (build-index resolvers)
-        entity (or entity {})]
-    (process-query (or env {}) index entity query)))
+  [{:keys [biff.pathom-lite/index] :as ctx} entity query-vec]
+  (process-query ctx (or entity {}) query-vec))
