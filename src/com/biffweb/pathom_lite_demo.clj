@@ -34,7 +34,7 @@
   (pl/resolver
    {:name    :user-friends
     :input   [:user/id]
-    :output  [{:user/friends [:user/id]}]
+    :output  [:user/friends]
     :resolve (fn [_env {:user/keys [id]}]
                {:user/friends (mapv (fn [fid] {:user/id fid})
                                     (get friends-db id []))})}))
@@ -51,7 +51,7 @@
   (pl/resolver
    {:name    :order-by-id
     :input   [:order/id]
-    :output  [:order/total :order/status {:order/user [:user/id]}]
+    :output  [:order/total :order/status :order/user]
     :resolve (fn [_env {:order/keys [id]}]
                (case id
                  100 {:order/total 59.99 :order/status :shipped :order/user {:user/id 1}}
@@ -62,7 +62,7 @@
   (pl/resolver
    {:name    :user-address
     :input   [:user/id]
-    :output  [{:user/address [:address/street :address/zip]}]
+    :output  [:user/address]
     :resolve (fn [_env {:user/keys [id]}]
                (case id
                  1 {:user/address {:address/street "123 Main St" :address/zip "10001"}}
@@ -147,9 +147,9 @@
   <h3>Available Resolvers</h3>
   <ul>
     <li><b>:user-by-id</b> — <code>[:user/id]</code> → <code>[:user/name :user/email :user/age]</code></li>
-    <li><b>:user-friends</b> — <code>[:user/id]</code> → <code>[{:user/friends [:user/id]}]</code></li>
+    <li><b>:user-friends</b> — <code>[:user/id]</code> → <code>[:user/friends]</code></li>
     <li><b>:user-greeting</b> — <code>[:user/name :user/age]</code> → <code>[:user/greeting]</code> (derived, chains through user-by-id)</li>
-    <li><b>:user-address</b> — <code>[:user/id]</code> → <code>[{:user/address [:address/street :address/zip]}]</code></li>
+    <li><b>:user-address</b> — <code>[:user/id]</code> → <code>[:user/address]</code></li>
     <li><b>:shipping-label</b> — <code>[{:order/user [:user/name {:user/address [:address/zip]}]}]</code> → <code>[:order/shipping-label]</code> (nested input!)</li>
   </ul>
   <h3>Orders in DB</h3>
