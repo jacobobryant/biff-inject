@@ -8,6 +8,7 @@ This library provides a minimal resolver-based data fetching engine that support
 - **Nested queries** (EQL-style joins)
 - **Nested inputs** (resolvers that require sub-attributes of their inputs)
 - **Optional inputs** (`[:? :key]` syntax)
+- **Optional query items** (`[:? :key]` in query vectors)
 - **Global resolvers** (no input required)
 - **Var-based resolvers** (metadata-driven, REPL-friendly)
 - **Transitive resolution** — automatically chains resolvers to satisfy dependencies
@@ -35,7 +36,7 @@ Add to your `deps.edn`:
 Define resolvers as regular functions with metadata:
 
 ```clojure
-(require '[biff.pl :as pl])
+(require '[com.biffweb.pathom-lite :as biff.pl])
 
 (defn user-by-id
   {:input [:user/id]
@@ -54,15 +55,15 @@ Define resolvers as regular functions with metadata:
 ### Build an index
 
 ```clojure
-(def index (pl/build-index [#'user-by-id #'user-friends]))
+(def index (biff.pl/build-index [#'user-by-id #'user-friends]))
 ```
 
 ### Run a query
 
 ```clojure
-(pl/query {:biff.pathom-lite/index index}
-          {:user/id 1}
-          [:user/name {:user/friends [:user/name]}])
+(biff.pl/query {:biff.pathom-lite/index index}
+               {:user/id 1}
+               [:user/name {:user/friends [:user/name]}])
 ;; => {:user/name "Alice"
 ;;     :user/friends [{:user/name "Bob"} {:user/name "Carol"}]}
 ```
@@ -88,27 +89,45 @@ Optional join inputs are also supported:
 :input [:user/name {[:? :user/address] [:address/zip]}]
 ```
 
+### Optional query items
+
+You can also mark query items as optional. When a query item can't be resolved,
+it is simply omitted from the result instead of throwing:
+
+```clojure
+(biff.pl/query {:biff.pathom-lite/index index}
+               {:user/id 1}
+               [:user/name [:? :user/nickname]])
+;; => {:user/name "Alice"}  ; :user/nickname omitted if no resolver
+```
+
+Optional joins in queries:
+
+```clojure
+[:user/name {[:? :user/extra] [:extra/info]}]
+```
+
 ### Map-based resolvers
 
 You can also define resolvers as plain maps:
 
 ```clojure
 (def my-resolver
-  {:id       :my-resolver
-   :input    [:some/input]
-   :output   [:some/output]
-   :resolver (fn [ctx input] {:some/output "value"})})
+  {:id      :my-resolver
+   :input   [:some/input]
+   :output  [:some/output]
+   :resolve (fn [ctx input] {:some/output "value"})})
 
-(def index (pl/build-index [my-resolver]))
+(def index (biff.pl/build-index [my-resolver]))
 ```
 
 ### API
 
-| Function       | Description                                                        |
-|---------------|--------------------------------------------------------------------|
-| `pl/build-index` | Build an index from a collection of resolvers (vars or maps)    |
-| `pl/query`       | Run an EQL query: `(query ctx entity query-vec)`                |
-| `pl/resolver`    | Normalize a resolver (var or map) into a resolver map           |
+| Function            | Description                                                     |
+|--------------------|-----------------------------------------------------------------|
+| `biff.pl/build-index` | Build an index from a collection of resolvers (vars or maps) |
+| `biff.pl/query`       | Run an EQL query: `(query ctx entity query-vec)`              |
+| `biff.pl/resolver`    | Normalize a resolver (var or map) into a resolver map         |
 
 The context map (`ctx`) passed to `query` must include `:biff.pathom-lite/index`
 (the result of `build-index`). Any other keys in ctx are passed through to resolver

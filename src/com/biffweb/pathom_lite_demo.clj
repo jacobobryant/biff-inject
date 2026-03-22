@@ -1,6 +1,6 @@
-(ns biff.pl-demo
-  "A small web demo for biff.pl. Run with: clojure -M -m biff.pl-demo"
-  (:require [biff.pl :as pl]
+(ns com.biffweb.pathom-lite-demo
+  "A small web demo for com.biffweb.pathom-lite. Run with: clojure -M -m com.biffweb.pathom-lite-demo"
+  (:require [com.biffweb.pathom-lite :as biff.pl]
             [clojure.string :as str]
             [clojure.edn :as edn])
   (:import [com.sun.net.httpserver HttpServer HttpHandler]
@@ -69,8 +69,8 @@
     {:order/shipping-label (str "Ship to: " user-name ", " zip)}))
 
 (def demo-index
-  (pl/build-index [#'user-by-id #'user-friends #'user-greeting
-                   #'order-by-id #'user-address #'shipping-label]))
+  (biff.pl/build-index [#'user-by-id #'user-friends #'user-greeting
+                         #'order-by-id #'user-address #'shipping-label]))
 
 ;; ---------------------------------------------------------------------------
 ;; HTML
@@ -92,13 +92,16 @@
    {:label "Nested input (shipping label)"
     :entity "{:order/id 100}"
     :query "[:order/shipping-label]"}
+   {:label "Optional query item"
+    :entity "{:user/id 1}"
+    :query "[:user/name [:? :nonexistent/attr]]"}
    {:label "Multiple attributes"
     :entity "{:user/id 3}"
     :query "[:user/name :user/age :user/email]"}])
 
 (defn html-page [result-html entity-val query-val]
   (str
-   "<!DOCTYPE html><html><head><meta charset='utf-8'><title>biff.pl demo</title>
+   "<!DOCTYPE html><html><head><meta charset='utf-8'><title>pathom-lite demo</title>
 <style>
   body { font-family: system-ui, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; background: #f8f9fa; color: #333; }
   h1 { color: #1a1a2e; }
@@ -112,7 +115,7 @@
   .examples button:hover { background: #dee2e6; }
   label { font-weight: bold; display: block; margin: 10px 0 5px; }
 </style></head><body>
-<h1>\uD83D\uDD25 biff.pl demo</h1>
+<h1>\uD83D\uDD25 pathom-lite demo</h1>
 <p>A lightweight alternative to <a href='https://pathom3.wsscode.com/'>pathom3</a>. Try running some EQL queries!</p>
 <div class='card'>
   <h3>Try an example:</h3>
@@ -136,11 +139,11 @@
    "<div class='card'>
   <h3>Available Resolvers</h3>
   <ul>
-    <li><b>:biff.pl-demo/user-by-id</b> — <code>[:user/id]</code> → <code>[:user/name :user/email :user/age]</code></li>
-    <li><b>:biff.pl-demo/user-friends</b> — <code>[:user/id]</code> → <code>[:user/friends]</code></li>
-    <li><b>:biff.pl-demo/user-greeting</b> — <code>[:user/name :user/age]</code> → <code>[:user/greeting]</code> (derived, chains through user-by-id)</li>
-    <li><b>:biff.pl-demo/user-address</b> — <code>[:user/id]</code> → <code>[:user/address]</code></li>
-    <li><b>:biff.pl-demo/shipping-label</b> — <code>[{:order/user [:user/name {:user/address [:address/zip]}]}]</code> → <code>[:order/shipping-label]</code> (nested input!)</li>
+    <li><b>user-by-id</b> — <code>[:user/id]</code> → <code>[:user/name :user/email :user/age]</code></li>
+    <li><b>user-friends</b> — <code>[:user/id]</code> → <code>[:user/friends]</code></li>
+    <li><b>user-greeting</b> — <code>[:user/name :user/age]</code> → <code>[:user/greeting]</code> (derived, chains through user-by-id)</li>
+    <li><b>user-address</b> — <code>[:user/id]</code> → <code>[:user/address]</code></li>
+    <li><b>shipping-label</b> — <code>[{:order/user [:user/name {:user/address [:address/zip]}]}]</code> → <code>[:order/shipping-label]</code> (nested input!)</li>
   </ul>
   <h3>Orders in DB</h3>
   <ul>
@@ -172,9 +175,9 @@
   (try
     (let [entity (edn/read-string entity-str)
           query  (edn/read-string query-str)
-          result (pl/query {:biff.pathom-lite/index demo-index}
-                           entity
-                           query)]
+          result (biff.pl/query {:biff.pathom-lite/index demo-index}
+                                entity
+                                query)]
       (str "<pre>" (pr-str result) "</pre>"))
     (catch Exception e
       (str "<pre style='color:#ef476f;background:#2b2d42'>"
@@ -227,4 +230,4 @@
                                           (.write os body))))))))
     (.setExecutor server nil)
     (.start server)
-    (println (str "biff.pl demo running on http://localhost:" port))))
+    (println (str "pathom-lite demo running on http://localhost:" port))))

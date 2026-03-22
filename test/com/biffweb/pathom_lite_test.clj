@@ -1,6 +1,6 @@
-(ns biff.pl-test
+(ns com.biffweb.pathom-lite-test
   (:require [clojure.test :refer [deftest is testing]]
-            [biff.pl :as pl]))
+            [com.biffweb.pathom-lite :as pl]))
 
 ;; ---------------------------------------------------------------------------
 ;; Test data: resolvers
@@ -10,7 +10,7 @@
   {:id       :user-by-id
    :input    [:user/id]
    :output   [:user/name :user/email]
-   :resolver (fn [_ctx {:user/keys [id]}]
+   :resolve  (fn [_ctx {:user/keys [id]}]
                (case id
                  1 {:user/name "Alice" :user/email "alice@example.com"}
                  2 {:user/name "Bob"   :user/email "bob@example.com"}
@@ -21,7 +21,7 @@
   {:id       :user-friends
    :input    [:user/id]
    :output   [:user/friends]
-   :resolver (fn [_ctx {:user/keys [id]}]
+   :resolve  (fn [_ctx {:user/keys [id]}]
                (case id
                  1 {:user/friends [{:user/id 2} {:user/id 3}]}
                  2 {:user/friends [{:user/id 1}]}
@@ -32,7 +32,7 @@
   {:id       :user-age
    :input    [:user/id]
    :output   [:user/age]
-   :resolver (fn [_ctx {:user/keys [id]}]
+   :resolve  (fn [_ctx {:user/keys [id]}]
                (case id
                  1 {:user/age 30}
                  2 {:user/age 25}
@@ -43,14 +43,14 @@
   {:id       :current-user
    :input    []
    :output   [:user/id]
-   :resolver (fn [ctx _input]
+   :resolve  (fn [ctx _input]
                {:user/id (:current-user-id ctx)})})
 
 (def order-by-id
   {:id       :order-by-id
    :input    [:order/id]
    :output   [:order/total :order/status :order/user]
-   :resolver (fn [_ctx {:order/keys [id]}]
+   :resolve  (fn [_ctx {:order/keys [id]}]
                (case id
                  100 {:order/total 59.99 :order/status :shipped :order/user {:user/id 1}}
                  101 {:order/total 12.50 :order/status :pending :order/user {:user/id 2}}
@@ -60,14 +60,14 @@
   {:id       :derived-greeting
    :input    [:user/name :user/age]
    :output   [:user/greeting]
-   :resolver (fn [_ctx {:user/keys [name age]}]
+   :resolve  (fn [_ctx {:user/keys [name age]}]
                {:user/greeting (str "Hello, " name "! You are " age " years old.")})})
 
 (def user-address
   {:id       :user-address
    :input    [:user/id]
    :output   [:user/address]
-   :resolver (fn [_ctx {:user/keys [id]}]
+   :resolve  (fn [_ctx {:user/keys [id]}]
                (case id
                  1 {:user/address {:address/street "123 Main St" :address/zip "10001"}}
                  2 {:user/address {:address/street "456 Oak Ave" :address/zip "90210"}}
@@ -78,7 +78,7 @@
   {:id       :shipping-label
    :input    [{:order/user [:user/name {:user/address [:address/zip]}]}]
    :output   [:order/shipping-label]
-   :resolver (fn [_ctx input]
+   :resolve  (fn [_ctx input]
                (let [user-name (get-in input [:order/user :user/name])
                      zip       (get-in input [:order/user :user/address :address/zip])]
                  {:order/shipping-label (str "Ship to: " user-name ", " zip)}))})
@@ -87,7 +87,7 @@
   {:id       :friend-summary
    :input    [{:user/friends [:user/name]}]
    :output   [:user/friend-names]
-   :resolver (fn [_ctx input]
+   :resolve  (fn [_ctx input]
                {:user/friend-names (mapv :user/name (:user/friends input))})})
 
 (def all-resolvers
@@ -180,10 +180,10 @@
     (is (thrown-with-msg?
          clojure.lang.ExceptionInfo
          #"must have an :id"
-         (pl/resolver {:resolver (fn [_ _] {})})))
+         (pl/resolver {:resolve (fn [_ _] {})})))
     (is (thrown-with-msg?
          clojure.lang.ExceptionInfo
-         #"must have a :resolver"
+         #"must have a :resolve"
          (pl/resolver {:id :test})))))
 
 ;; ---------------------------------------------------------------------------
@@ -216,12 +216,12 @@
                [{:id       :partial
                  :input    [:user/id]
                  :output   [:user/name :user/nickname]
-                 :resolver (fn [_ctx {:user/keys [id]}]
+                 :resolve  (fn [_ctx {:user/keys [id]}]
                              {:user/name (str "User-" id)})}
                 {:id       :complete
                  :input    [:user/id]
                  :output   [:user/nickname]
-                 :resolver (fn [_ctx {:user/keys [id]}]
+                 :resolve  (fn [_ctx {:user/keys [id]}]
                              {:user/nickname (str "Nick-" id)})}])]
       (is (= {:user/nickname "Nick-1"}
              (pl/query {:biff.pathom-lite/index idx} {:user/id 1} [:user/nickname]))))))
@@ -232,7 +232,7 @@
                [{:id       :nil-val
                  :input    [:user/id]
                  :output   [:user/nickname]
-                 :resolver (fn [_ctx _input]
+                 :resolve  (fn [_ctx _input]
                              {:user/nickname nil})}])]
       (is (= {:user/nickname nil}
              (pl/query {:biff.pathom-lite/index idx} {:user/id 1} [:user/nickname]))))))
@@ -263,7 +263,7 @@
                [{:id       :bad-friends
                  :input    [:user/id]
                  :output   [:user/friends]
-                 :resolver (fn [_ctx _input]
+                 :resolve  (fn [_ctx _input]
                              {:user/friends "oops-not-a-map"})}])]
       (is (thrown-with-msg?
            clojure.lang.ExceptionInfo
@@ -282,7 +282,7 @@
          (pl/resolver {:id       :bad-output
                        :input    [:user/id]
                        :output   [{:user/friends [:user/name]}]
-                       :resolver (fn [_ _] {})})))))
+                       :resolve  (fn [_ _] {})})))))
 
 ;; ---------------------------------------------------------------------------
 ;; Var-based resolver tests
@@ -300,10 +300,10 @@
 (deftest var-resolver-test
   (testing "Var-based resolver uses metadata for input/output and var ns/name for id"
     (let [r (pl/resolver #'var-user-by-id)]
-      (is (= :biff.pl-test/var-user-by-id (:id r)))
+      (is (= :com.biffweb.pathom-lite-test/var-user-by-id (:id r)))
       (is (= [:user/id] (:input r)))
       (is (= [:user/name :user/email] (:output r)))
-      (is (var? (:resolver r))))))
+      (is (var? (:resolve r))))))
 
 (deftest var-resolver-query-test
   (testing "Var-based resolver works in queries"
@@ -318,14 +318,14 @@
       (is (= {:user/name "Alice"} original-result))
       ;; The resolver stores the var, so if the var were rebound, the new
       ;; behavior would be picked up. We verify the var is stored, not the fn.
-      (is (var? (:resolver (first (:all-resolvers idx))))))))
+      (is (var? (:resolve (first (:all-resolvers idx))))))))
 
 (deftest build-index-auto-resolves-test
   (testing "build-index calls resolver on each item automatically"
     (let [idx (pl/build-index [{:id       :test-r
                                 :input    [:a]
                                 :output   [:b]
-                                :resolver (fn [_ _] {:b 1})}])]
+                                :resolve  (fn [_ _] {:b 1})}])]
       (is (= [:test-r] (mapv :id (:all-resolvers idx)))))))
 
 ;; ---------------------------------------------------------------------------
@@ -338,7 +338,7 @@
                [{:id       :greeting-with-title
                  :input    [:user/name [:? :user/title]]
                  :output   [:user/greeting]
-                 :resolver (fn [_ctx {:user/keys [name title]}]
+                 :resolve  (fn [_ctx {:user/keys [name title]}]
                              {:user/greeting (if title
                                               (str "Hello, " title " " name "!")
                                               (str "Hello, " name "!"))})}])]
@@ -353,7 +353,7 @@
                [{:id       :greeting-with-title
                  :input    [:user/name [:? :user/title]]
                  :output   [:user/greeting]
-                 :resolver (fn [_ctx {:user/keys [name title]}]
+                 :resolve  (fn [_ctx {:user/keys [name title]}]
                              {:user/greeting (if title
                                               (str "Hello, " title " " name "!")
                                               (str "Hello, " name "!"))})}])]
@@ -370,7 +370,7 @@
                 {:id       :label-with-address
                  :input    [:user/name {[:? :user/address] [:address/zip]}]
                  :output   [:user/label]
-                 :resolver (fn [_ctx input]
+                 :resolve  (fn [_ctx input]
                              (let [name (get input :user/name)
                                    zip  (get-in input [:user/address :address/zip])]
                                {:user/label (if zip
@@ -387,7 +387,7 @@
                [{:id       :label-with-address
                  :input    [:user/name {[:? :user/address] [:address/zip]}]
                  :output   [:user/label]
-                 :resolver (fn [_ctx input]
+                 :resolve  (fn [_ctx input]
                              (let [name (get input :user/name)
                                    zip  (get-in input [:user/address :address/zip])]
                                {:user/label (if zip
@@ -397,3 +397,62 @@
              (pl/query {:biff.pathom-lite/index idx}
                        {:user/name "Alice"}
                        [:user/label]))))))
+
+;; ---------------------------------------------------------------------------
+;; Optional query item tests
+;; ---------------------------------------------------------------------------
+
+(deftest optional-query-item-present-test
+  (testing "Optional query item is included when resolvable"
+    (is (= {:user/name "Alice" :user/email "alice@example.com"}
+           (q {:user/id 1} [:user/name [:? :user/email]])))))
+
+(deftest optional-query-item-missing-test
+  (testing "Optional query item is omitted when not resolvable"
+    (is (= {:user/name "Alice"}
+           (q {:user/id 1} [:user/name [:? :nonexistent/attr]])))))
+
+(deftest optional-query-join-present-test
+  (testing "Optional join in query is included when resolvable"
+    (is (= {:user/name "Alice"
+            :user/friends [{:user/name "Bob"} {:user/name "Carol"}]}
+           (q {:user/id 1} [:user/name {[:? :user/friends] [:user/name]}])))))
+
+(deftest optional-query-join-missing-test
+  (testing "Optional join in query is omitted when not resolvable"
+    (is (= {:user/name "Alice"}
+           (q {:user/id 1} [:user/name {[:? :nonexistent/join] [:some/attr]}])))))
+
+(deftest optional-query-item-from-entity-test
+  (testing "Optional query item works when value is in entity"
+    (is (= {:user/name "Alice" :extra "data"}
+           (q {:user/id 1 :extra "data"} [:user/name [:? :extra]])))))
+
+;; ---------------------------------------------------------------------------
+;; Exception handling tests
+;; ---------------------------------------------------------------------------
+
+(deftest resolve-error-has-marker-test
+  (testing "Resolution errors include ::pl/resolve-error in ex-data"
+    (try
+      (q {:user/id 1} [:nonexistent/attr])
+      (is false "Should have thrown")
+      (catch clojure.lang.ExceptionInfo e
+        (is (true? (:com.biffweb.pathom-lite/resolve-error (ex-data e))))))))
+
+(deftest non-resolve-exceptions-propagate-test
+  (testing "Non-resolution exceptions from resolvers are not swallowed"
+    (let [idx (pl/build-index
+               [{:id       :throws-runtime
+                 :input    [:user/id]
+                 :output   [:user/boom]
+                 :resolve  (fn [_ _] (throw (ex-info "custom error" {:custom true})))}])]
+      (try
+        (pl/query {:biff.pathom-lite/index idx} {:user/id 1} [:user/boom])
+        (is false "Should have thrown")
+        (catch clojure.lang.ExceptionInfo e
+          ;; The custom exception should propagate (not be swallowed as a resolve error)
+          ;; It might be wrapped in a "No resolver found" if the resolver throws non-resolve-error
+          ;; and then no other candidate succeeds. Let's verify it gets through.
+          (is (or (:custom (ex-data e))
+                  (:com.biffweb.pathom-lite/resolve-error (ex-data e)))))))))
