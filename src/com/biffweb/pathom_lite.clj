@@ -4,6 +4,7 @@
   Supports:
   - Simple resolvers with declared input/output
   - Nested queries (joins)
+  - Nested inputs (resolvers that require sub-attributes of their inputs)
   - Global resolvers (no input)
   - Strict mode only (throws on missing data)
 
@@ -85,18 +86,40 @@
             (get item attr)))
         output))
 
-(defn- ensure-inputs
-  "Ensure all required input keys are present in entity, resolving them
-  transitively if needed. Returns the enriched entity."
-  [env index entity required-keys resolving]
-  (reduce
-   (fn [ent k]
-     (if (contains? ent k)
-       ent
-       (let [v (resolve-attr env index ent k nil resolving)]
-         (assoc ent k v))))
-   entity
-   required-keys))
+(defn- input-item-key
+  "Extract the top-level key from an input item (keyword or join map)."
+  [input-item]
+  (if (map? input-item) (ffirst input-item) input-item))
+
+(defn- resolve-input-map
+  "Resolve all required inputs and build the (possibly nested) input map.
+  Handles both flat keyword inputs and nested join inputs like
+  [{:order/user [:user/name]}]."
+  [env index entity input resolving]
+  ;; First pass: ensure all top-level keys are resolved in the entity
+  (let [enriched (reduce
+                  (fn [ent input-item]
+                    (let [k (input-item-key input-item)]
+                      (if (contains? ent k)
+                        ent
+                        (assoc ent k (resolve-attr env index ent k nil resolving)))))
+                  entity
+                  input)]
+    ;; Second pass: build the input map with proper nesting
+    (reduce
+     (fn [result input-item]
+       (if (map? input-item)
+         (let [attr     (ffirst input-item)
+               sub-input (val (first input-item))
+               v        (get enriched attr)]
+           (assoc result attr
+                  (cond
+                    (map? v)        (resolve-input-map env index v sub-input resolving)
+                    (sequential? v) (mapv #(resolve-input-map env index % sub-input resolving) v)
+                    :else           v)))
+         (assoc result input-item (get enriched input-item))))
+     {}
+     input)))
 
 (defn- resolve-attr
   "Resolve a single attribute (possibly a join) for the given entity.
@@ -121,11 +144,10 @@
             resolved (some
                       (fn [r]
                         (try
-                          (let [enriched (ensure-inputs env index entity (:input r) resolving)
-                                input-map (select-keys enriched (:input r))
+                          (let [input-map (resolve-input-map env index entity (:input r) resolving)
                                 result ((:resolve r) env input-map)
                                 v (get result attr)]
-                            {:value v :enriched enriched})
+                            {:value v})
                           (catch clojure.lang.ExceptionInfo _e
                             nil)))
                       candidates)]

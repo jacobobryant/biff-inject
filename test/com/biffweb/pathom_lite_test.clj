@@ -69,8 +69,39 @@
     :resolve (fn [_env {:user/keys [name age]}]
                {:user/greeting (str "Hello, " name "! You are " age " years old.")})}))
 
+(def user-address
+  (pl/resolver
+   {:name    :user-address
+    :input   [:user/id]
+    :output  [{:user/address [:address/street :address/zip]}]
+    :resolve (fn [_env {:user/keys [id]}]
+               (case id
+                 1 {:user/address {:address/street "123 Main St" :address/zip "10001"}}
+                 2 {:user/address {:address/street "456 Oak Ave" :address/zip "90210"}}
+                 3 {:user/address {:address/street "789 Elm Rd"  :address/zip "60601"}}
+                 (throw (ex-info "Address not found" {:user/id id}))))}))
+
+(def shipping-label
+  (pl/resolver
+   {:name    :shipping-label
+    :input   [{:order/user [:user/name {:user/address [:address/zip]}]}]
+    :output  [:order/shipping-label]
+    :resolve (fn [_env input]
+               (let [user-name (get-in input [:order/user :user/name])
+                     zip       (get-in input [:order/user :user/address :address/zip])]
+                 {:order/shipping-label (str "Ship to: " user-name ", " zip)}))}))
+
+(def friend-summary
+  (pl/resolver
+   {:name    :friend-summary
+    :input   [{:user/friends [:user/name]}]
+    :output  [:user/friend-names]
+    :resolve (fn [_env input]
+               {:user/friend-names (mapv :user/name (:user/friends input))})}))
+
 (def all-resolvers
-  [user-by-id user-friends user-age current-user order-by-id derived-greeting])
+  [user-by-id user-friends user-age current-user order-by-id derived-greeting
+   user-address shipping-label friend-summary])
 
 ;; ---------------------------------------------------------------------------
 ;; Tests
@@ -191,3 +222,33 @@
          clojure.lang.ExceptionInfo
          #"must have a :resolve"
          (pl/resolver {:name :test})))))
+
+;; ---------------------------------------------------------------------------
+;; Nested input tests
+;; ---------------------------------------------------------------------------
+
+(deftest nested-input-simple-test
+  (testing "Resolver with nested join input resolves the nested data"
+    (let [result (pl/process
+                  {:resolvers all-resolvers
+                   :entity    {:order/id 100}
+                   :query     [:order/shipping-label]})]
+      (is (= {:order/shipping-label "Ship to: Alice, 10001"} result)))))
+
+(deftest nested-input-collection-test
+  (testing "Resolver with nested collection input"
+    (let [result (pl/process
+                  {:resolvers all-resolvers
+                   :entity    {:user/id 1}
+                   :query     [:user/friend-names]})]
+      (is (= {:user/friend-names ["Bob" "Carol"]} result)))))
+
+(deftest nested-input-with-other-attrs-test
+  (testing "Nested input alongside regular output queries"
+    (let [result (pl/process
+                  {:resolvers all-resolvers
+                   :entity    {:order/id 100}
+                   :query     [:order/total :order/shipping-label]})]
+      (is (= {:order/total 59.99
+              :order/shipping-label "Ship to: Alice, 10001"}
+             result)))))
