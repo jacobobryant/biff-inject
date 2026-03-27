@@ -158,12 +158,25 @@ You can also define resolvers as plain maps:
 (def index (biff.pl/build-index [my-resolver]))
 ```
 
+### Batch querying (vector of entities)
+
+`query` accepts either a single entity map or a vector of entity maps. When given
+a vector, it returns a vector of result maps — and uses batch resolvers to process
+all entities efficiently:
+
+```clojure
+(biff.pl/query {:biff.pathom-lite/index index}
+               [{:user/id 1} {:user/id 2} {:user/id 3}]
+               [:user/name])
+;; => [{:user/name "Alice"} {:user/name "Bob"} {:user/name "Carol"}]
+```
+
 ### API
 
 | Function            | Description                                                     |
 |--------------------|-----------------------------------------------------------------|
 | `biff.pl/build-index` | Build an index from a collection of resolvers (vars or maps) |
-| `biff.pl/query`       | Run an EQL query: `(query ctx entity query-vec)`              |
+| `biff.pl/query`       | Run an EQL query: `(query ctx entity-or-entities query-vec)`  |
 | `biff.pl/resolver`    | Normalize a resolver (var or map) into a resolver map         |
 
 The context map (`ctx`) passed to `query` must include `:biff.pathom-lite/index`
