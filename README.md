@@ -29,7 +29,7 @@ This library provides a minimal resolver-based data fetching engine that support
 Add to your `deps.edn`:
 
 ```clojure
-{:deps {com.biffweb/inject {:git/url "https://github.com/jacobobryant/biff-pathom-lite"
+{:deps {com.biffweb/inject {:git/url "https://github.com/jacobobryant/biff-inject"
                                   :git/sha "..."}}}
 ```
 
