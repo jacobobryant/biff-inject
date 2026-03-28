@@ -317,8 +317,10 @@
           original-result (pl/query {:biff.pathom-lite/index idx} {:user/id 1} [:user/name])]
       (is (= {:user/name "Alice"} original-result))
       ;; The resolver stores the var, so if the var were rebound, the new
-      ;; behavior would be picked up. We verify the var is stored, not the fn.
-      (is (var? (:resolve (first (:all-resolvers idx))))))))
+      ;; behavior would be picked up. build-index wraps :resolve with caching,
+      ;; so the var is no longer directly stored. But calling through the
+      ;; wrapper still invokes the var, preserving reeval semantics.
+      (is (fn? (:resolve (first (:all-resolvers idx))))))))
 
 (deftest build-index-auto-resolves-test
   (testing "build-index calls resolver on each item automatically"
@@ -809,3 +811,182 @@
              result))
       ;; batch-user-by-id called once for both friends' :user/name input resolution
       (is (= 1 (:batch-user-by-id @batch-call-counts))))))
+
+;; ---------------------------------------------------------------------------
+;; Caching tests
+;; ---------------------------------------------------------------------------
+
+(deftest cache-non-batch-memoize-test
+  (testing "Non-batch resolver is only called once per unique input within a query"
+    (let [call-count (atom 0)
+          idx (pl/build-index
+               [{:id       :user-name
+                 :input    [:user/id]
+                 :output   [:user/name]
+                 :resolve  (fn [_ctx {:user/keys [id]}]
+                             (swap! call-count inc)
+                             {:user/name (str "User-" id)})}
+                user-friends])
+          result (pl/query {:biff.pathom-lite/index idx}
+                           {:user/id 1}
+                           [{:user/friends [:user/name]}])]
+      ;; User 1's friends are user 2 and user 3 — two different inputs,
+      ;; so the resolver should be called twice.
+      (is (= {:user/friends [{:user/name "User-2"} {:user/name "User-3"}]}
+             result))
+      (is (= 2 @call-count)))))
+
+(deftest cache-non-batch-duplicate-input-test
+  (testing "Non-batch resolver reuses cached result for duplicate inputs across tree levels"
+    (let [call-count (atom 0)
+          idx (pl/build-index
+               [{:id       :user-name
+                 :input    [:user/id]
+                 :output   [:user/name]
+                 :resolve  (fn [_ctx {:user/keys [id]}]
+                             (swap! call-count inc)
+                             {:user/name (str "User-" id)})}
+                user-friends])
+          ;; User 1's friends: [2, 3]
+          ;; User 2's friends: [1]
+          ;; User 3's friends: [1, 2]
+          ;; At grandchild level: need :user/name for users 1, 1, 2
+          ;; User 2's name was resolved at child level → cached
+          ;; User 1's name only needs one actual call (second is cached)
+          result (pl/query {:biff.pathom-lite/index idx}
+                           {:user/id 1}
+                           [{:user/friends [:user/name {:user/friends [:user/name]}]}])]
+      (is (= {:user/friends [{:user/name "User-2"
+                               :user/friends [{:user/name "User-1"}]}
+                              {:user/name "User-3"
+                               :user/friends [{:user/name "User-1"} {:user/name "User-2"}]}]}
+             result))
+      ;; Without caching: user-name called for [2,3] at child level, then [1,1,2] at
+      ;; grandchild level = 5 calls. With caching: [2,3] at child level (2 calls),
+      ;; then at grandchild level user 2 is cached, user 1 called once and reused = 3 calls.
+      (is (= 3 @call-count)))))
+
+(deftest cache-batch-partial-hit-test
+  (testing "Batch resolver only sends uncached inputs to the underlying resolver"
+    (let [call-log (atom [])
+          idx (pl/build-index
+               [{:id       :batch-name
+                 :input    [:user/id]
+                 :output   [:user/name]
+                 :batch    true
+                 :resolve  (fn [_ctx inputs]
+                             (swap! call-log conj (mapv :user/id inputs))
+                             (mapv (fn [{:user/keys [id]}]
+                                     {:user/name (str "User-" id)})
+                                   inputs))}
+                user-friends])
+          result (pl/query {:biff.pathom-lite/index idx}
+                           {:user/id 1}
+                           [{:user/friends [:user/name {:user/friends [:user/name]}]}])]
+      (is (= {:user/friends [{:user/name "User-2"
+                               :user/friends [{:user/name "User-1"}]}
+                              {:user/name "User-3"
+                               :user/friends [{:user/name "User-1"} {:user/name "User-2"}]}]}
+             result))
+      ;; First batch call: users [2, 3] at child level
+      ;; Second batch call: only user [1] at grandchild level (user 2 cached from first call,
+      ;; and duplicate user 1 entries are deduplicated)
+      (is (= [[2 3] [1]] @call-log)))))
+
+(deftest cache-batch-all-cached-test
+  (testing "Batch resolver is not called when all inputs are cached"
+    (let [call-count (atom 0)
+          idx (pl/build-index
+               [{:id       :batch-name
+                 :input    [:user/id]
+                 :output   [:user/name]
+                 :batch    true
+                 :resolve  (fn [_ctx inputs]
+                             (swap! call-count inc)
+                             (mapv (fn [{:user/keys [id]}]
+                                     {:user/name (str "User-" id)})
+                                   inputs))}
+                ;; friends resolver that returns friends who are already known
+                {:id       :self-friends
+                 :input    [:user/id]
+                 :output   [:user/friends]
+                 :resolve  (fn [_ctx {:user/keys [id]}]
+                             (case id
+                               1 {:user/friends [{:user/id 2}]}
+                               2 {:user/friends [{:user/id 1}]}
+                               {:user/friends []}))}])
+          ;; Query: resolve name for user 1, then resolve friends (user 2),
+          ;; then resolve name for user 2's friends (user 1, which is already cached)
+          result (pl/query {:biff.pathom-lite/index idx}
+                           {:user/id 1}
+                           [:user/name {:user/friends [:user/name {:user/friends [:user/name]}]}])]
+      (is (= {:user/name "User-1"
+              :user/friends [{:user/name "User-2"
+                              :user/friends [{:user/name "User-1"}]}]}
+             result))
+      ;; batch-name called: once for [user 1] (top level) + once for [user 2] (child).
+      ;; At grandchild level, user 1 is cached → no call.
+      (is (= 2 @call-count)))))
+
+(deftest cache-per-query-isolation-test
+  (testing "Cache is fresh per query call — no cross-query caching"
+    (let [call-count (atom 0)
+          idx (pl/build-index
+               [{:id       :counting-resolver
+                 :input    [:user/id]
+                 :output   [:user/name]
+                 :resolve  (fn [_ctx {:user/keys [id]}]
+                             (swap! call-count inc)
+                             {:user/name (str "User-" id)})}])]
+      (pl/query {:biff.pathom-lite/index idx} {:user/id 1} [:user/name])
+      (is (= 1 @call-count))
+      ;; Second query with same input — cache is fresh, so resolver called again
+      (pl/query {:biff.pathom-lite/index idx} {:user/id 1} [:user/name])
+      (is (= 2 @call-count)))))
+
+(deftest cache-nil-result-test
+  (testing "Cached results with nil values are still returned from cache"
+    (let [call-count (atom 0)
+          idx (pl/build-index
+               [{:id       :nil-resolver
+                 :input    [:user/id]
+                 :output   [:user/nickname]
+                 :resolve  (fn [_ctx _input]
+                             (swap! call-count inc)
+                             {:user/nickname nil})}
+                {:id       :self-friends
+                 :input    [:user/id]
+                 :output   [:user/friends]
+                 :resolve  (fn [_ctx {:user/keys [id]}]
+                             {:user/friends [{:user/id id}]})}])
+          ;; Query nickname at top level, then again in a join
+          result (pl/query {:biff.pathom-lite/index idx}
+                           {:user/id 1}
+                           [:user/nickname {:user/friends [:user/nickname]}])]
+      (is (= {:user/nickname nil
+              :user/friends [{:user/nickname nil}]}
+             result))
+      ;; Resolver called once for user 1 at top level, cached for the join
+      (is (= 1 @call-count)))))
+
+(deftest cache-global-resolver-test
+  (testing "Global resolvers (no input) are cached within a query"
+    (let [call-count (atom 0)
+          idx (pl/build-index
+               [{:id       :counting-global
+                 :input    []
+                 :output   [:user/id]
+                 :resolve  (fn [_ctx _input]
+                             (swap! call-count inc)
+                             {:user/id 42})}
+                {:id       :user-name
+                 :input    [:user/id]
+                 :output   [:user/name]
+                 :resolve  (fn [_ctx {:user/keys [id]}]
+                             {:user/name (str "User-" id)})}])
+          result (pl/query {:biff.pathom-lite/index idx}
+                           [{} {}]
+                           [:user/name])]
+      (is (= [{:user/name "User-42"} {:user/name "User-42"}] result))
+      ;; Global resolver called once, result reused for second entity
+      (is (= 1 @call-count)))))

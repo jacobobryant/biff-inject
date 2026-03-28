@@ -10,6 +10,7 @@
   - Global resolvers (no input)
   - Var-based resolvers (metadata-driven)
   - Batch resolvers (process multiple entities at once, breadth-first)
+  - Per-query resolver caching (avoids redundant resolver calls)
   - Strict mode only (throws on missing data)
 
   Omits (compared to pathom3):
@@ -112,14 +113,60 @@
        :resolve resolve
        :batch (boolean batch)})))
 
+;; ---------------------------------------------------------------------------
+;; Caching wrappers
+;; ---------------------------------------------------------------------------
+
+(defn- wrap-caching
+  "Wrap a resolver's :resolve function with per-query caching.
+  The cache is an atom stored in ctx under :biff.pathom-lite/cache.
+  For non-batch resolvers, acts like memoize keyed on the input map.
+  For batch resolvers, checks each input element individually and only
+  sends unique uncached inputs to the underlying resolver."
+  [{:keys [id batch resolve]}]
+  (if batch
+    (fn [ctx inputs]
+      (if-let [cache (:biff.pathom-lite/cache ctx)]
+        (let [resolver-cache (get @cache id {})
+              uncached-idxs (vec (keep (fn [i] (when-not (contains? resolver-cache (nth inputs i)) i))
+                                       (range (count inputs))))
+              ;; Deduplicate uncached inputs while preserving order
+              unique-uncached (vec (distinct (map #(nth inputs %) uncached-idxs)))]
+          (if (empty? unique-uncached)
+            (mapv #(get resolver-cache %) inputs)
+            (let [new-results (resolve ctx unique-uncached)
+                  _ (swap! cache update id
+                           (fn [m]
+                             (reduce (fn [m [input result]]
+                                       (assoc m input result))
+                                     (or m {})
+                                     (map vector unique-uncached new-results))))
+                  updated-cache (get @cache id)]
+              (mapv #(get updated-cache %) inputs))))
+        (resolve ctx inputs)))
+    (fn [ctx input]
+      (if-let [cache (:biff.pathom-lite/cache ctx)]
+        (let [resolver-cache (get @cache id)]
+          (if (and resolver-cache (contains? resolver-cache input))
+            (get resolver-cache input)
+            (let [result (resolve ctx input)]
+              (swap! cache assoc-in [id input] result)
+              result)))
+        (resolve ctx input)))))
+
 (defn build-index
   "Build an index from a collection of resolvers (maps or vars).
-  Calls `resolver` on each item.
+  Calls `resolver` on each item and wraps each resolver's :resolve function
+  with caching logic. When a cache atom is present in the query context
+  (under :biff.pathom-lite/cache), resolved results are memoized per input.
   Returns a map with:
     :resolvers-by-output  {attr-key [resolver ...]}
     :all-resolvers        [resolver ...]"
   [resolvers]
-  (let [resolvers (mapv resolver resolvers)]
+  (let [resolvers (mapv (fn [r]
+                          (let [r (resolver r)]
+                            (assoc r :resolve (wrap-caching r))))
+                        resolvers)]
     {:resolvers-by-output
      (reduce (fn [idx r]
                (reduce (fn [idx k]
@@ -339,7 +386,8 @@
   or a vector of maps when given a vector of entities.
   Throws ExceptionInfo if any required attribute cannot be resolved."
   [{:keys [biff.pathom-lite/index] :as ctx} entity-or-entities query-vec]
-  (let [is-vec? (sequential? entity-or-entities)
+  (let [ctx (assoc ctx :biff.pathom-lite/cache (atom {}))
+        is-vec? (sequential? entity-or-entities)
         entities (if is-vec? (vec entity-or-entities) [(or entity-or-entities {})])
         results (process-entities ctx entities query-vec #{})]
     (doseq [r results]
