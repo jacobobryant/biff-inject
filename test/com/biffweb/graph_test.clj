@@ -1,6 +1,6 @@
-(ns com.biffweb.inject-test
+(ns com.biffweb.graph-test
   (:require [clojure.test :refer [deftest is testing]]
-            [com.biffweb.inject :as inject]))
+            [com.biffweb.graph :as graph]))
 
 ;; ---------------------------------------------------------------------------
 ;; Test data: resolvers
@@ -94,14 +94,14 @@
   [user-by-id user-friends user-age current-user order-by-id derived-greeting
    user-address shipping-label friend-summary])
 
-(def index (inject/build-index all-resolvers))
+(def index (graph/build-index all-resolvers))
 
 (defn q
   "Helper to run a query with the test index and optional extra ctx keys."
   ([entity query-vec]
-   (inject/query {:biff.inject/index index} entity query-vec))
+   (graph/query {:biff.graph/index index} entity query-vec))
   ([ctx entity query-vec]
-   (inject/query (assoc ctx :biff.inject/index index) entity query-vec)))
+   (graph/query (assoc ctx :biff.graph/index index) entity query-vec)))
 
 ;; ---------------------------------------------------------------------------
 ;; Tests
@@ -166,7 +166,7 @@
 
 (deftest build-index-test
   (testing "build-index indexes resolvers by their flat output keys"
-    (let [idx (inject/build-index [user-by-id user-friends])]
+    (let [idx (graph/build-index [user-by-id user-friends])]
       (is (= [:user-by-id] (mapv :id (get-in idx [:resolvers-by-output :user/name]))))
       (is (= [:user-by-id] (mapv :id (get-in idx [:resolvers-by-output :user/email]))))
       (is (= [:user-friends] (mapv :id (get-in idx [:resolvers-by-output :user/friends])))))))
@@ -180,11 +180,11 @@
     (is (thrown-with-msg?
          clojure.lang.ExceptionInfo
          #"must have an :id"
-         (inject/resolver {:resolve (fn [_ _] {})})))
+         (graph/resolver {:resolve (fn [_ _] {})})))
     (is (thrown-with-msg?
          clojure.lang.ExceptionInfo
          #"must have a :resolve"
-         (inject/resolver {:id :test})))))
+         (graph/resolver {:id :test})))))
 
 ;; ---------------------------------------------------------------------------
 ;; Nested input tests
@@ -212,7 +212,7 @@
 
 (deftest optional-output-test
   (testing "Resolver that doesn't return the requested key is skipped"
-    (let [idx (inject/build-index
+    (let [idx (graph/build-index
                [{:id       :partial
                  :input    [:user/id]
                  :output   [:user/name :user/nickname]
@@ -224,18 +224,18 @@
                  :resolve  (fn [_ctx {:user/keys [id]}]
                              {:user/nickname (str "Nick-" id)})}])]
       (is (= {:user/nickname "Nick-1"}
-             (inject/query {:biff.inject/index idx} {:user/id 1} [:user/nickname]))))))
+             (graph/query {:biff.graph/index idx} {:user/id 1} [:user/nickname]))))))
 
 (deftest optional-output-nil-value-test
   (testing "Resolver that returns the key with nil value is accepted"
-    (let [idx (inject/build-index
+    (let [idx (graph/build-index
                [{:id       :nil-val
                  :input    [:user/id]
                  :output   [:user/nickname]
                  :resolve  (fn [_ctx _input]
                              {:user/nickname nil})}])]
       (is (= {:user/nickname nil}
-             (inject/query {:biff.inject/index idx} {:user/id 1} [:user/nickname]))))))
+             (graph/query {:biff.graph/index idx} {:user/id 1} [:user/nickname]))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Join validation tests
@@ -259,7 +259,7 @@
 
 (deftest join-scalar-from-resolver-throws-test
   (testing "Join on a scalar value from resolver throws"
-    (let [idx (inject/build-index
+    (let [idx (graph/build-index
                [{:id       :bad-friends
                  :input    [:user/id]
                  :output   [:user/friends]
@@ -268,7 +268,7 @@
       (is (thrown-with-msg?
            clojure.lang.ExceptionInfo
            #"Expected a map or collection for join"
-           (inject/query {:biff.inject/index idx} {:user/id 1} [{:user/friends [:user/name]}]))))))
+           (graph/query {:biff.graph/index idx} {:user/id 1} [{:user/friends [:user/name]}]))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Flat output validation tests
@@ -279,7 +279,7 @@
     (is (thrown-with-msg?
          clojure.lang.ExceptionInfo
          #"must be flat keywords"
-         (inject/resolver {:id       :bad-output
+         (graph/resolver {:id       :bad-output
                        :input    [:user/id]
                        :output   [{:user/friends [:user/name]}]
                        :resolve  (fn [_ _] {})})))))
@@ -299,22 +299,22 @@
 
 (deftest var-resolver-test
   (testing "Var-based resolver uses metadata for input/output and var ns/name for id"
-    (let [r (inject/resolver #'var-user-by-id)]
-      (is (= :com.biffweb.inject-test/var-user-by-id (:id r)))
+    (let [r (graph/resolver #'var-user-by-id)]
+      (is (= :com.biffweb.graph-test/var-user-by-id (:id r)))
       (is (= [:user/id] (:input r)))
       (is (= [:user/name :user/email] (:output r)))
       (is (var? (:resolve r))))))
 
 (deftest var-resolver-query-test
   (testing "Var-based resolver works in queries"
-    (let [idx (inject/build-index [#'var-user-by-id])]
+    (let [idx (graph/build-index [#'var-user-by-id])]
       (is (= {:user/name "Alice" :user/email "alice@example.com"}
-             (inject/query {:biff.inject/index idx} {:user/id 1} [:user/name :user/email]))))))
+             (graph/query {:biff.graph/index idx} {:user/id 1} [:user/name :user/email]))))))
 
 (deftest var-resolver-reeval-test
   (testing "Var-based resolver picks up redefined functions"
-    (let [idx (inject/build-index [#'var-user-by-id])
-          original-result (inject/query {:biff.inject/index idx} {:user/id 1} [:user/name])]
+    (let [idx (graph/build-index [#'var-user-by-id])
+          original-result (graph/query {:biff.graph/index idx} {:user/id 1} [:user/name])]
       (is (= {:user/name "Alice"} original-result))
       ;; The resolver stores the var, so if the var were rebound, the new
       ;; behavior would be picked up. build-index wraps :resolve with caching,
@@ -324,7 +324,7 @@
 
 (deftest build-index-auto-resolves-test
   (testing "build-index calls resolver on each item automatically"
-    (let [idx (inject/build-index [{:id       :test-r
+    (let [idx (graph/build-index [{:id       :test-r
                                 :input    [:a]
                                 :output   [:b]
                                 :resolve  (fn [_ _] {:b 1})}])]
@@ -336,7 +336,7 @@
 
 (deftest optional-input-present-test
   (testing "Optional input is included when available"
-    (let [idx (inject/build-index
+    (let [idx (graph/build-index
                [{:id       :greeting-with-title
                  :input    [:user/name [:? :user/title]]
                  :output   [:user/greeting]
@@ -345,13 +345,13 @@
                                               (str "Hello, " title " " name "!")
                                               (str "Hello, " name "!"))})}])]
       (is (= {:user/greeting "Hello, Dr. Alice!"}
-             (inject/query {:biff.inject/index idx}
+             (graph/query {:biff.graph/index idx}
                        {:user/name "Alice" :user/title "Dr."}
                        [:user/greeting]))))))
 
 (deftest optional-input-missing-test
   (testing "Optional input is omitted when not available"
-    (let [idx (inject/build-index
+    (let [idx (graph/build-index
                [{:id       :greeting-with-title
                  :input    [:user/name [:? :user/title]]
                  :output   [:user/greeting]
@@ -360,13 +360,13 @@
                                               (str "Hello, " title " " name "!")
                                               (str "Hello, " name "!"))})}])]
       (is (= {:user/greeting "Hello, Alice!"}
-             (inject/query {:biff.inject/index idx}
+             (graph/query {:biff.graph/index idx}
                        {:user/name "Alice"}
                        [:user/greeting]))))))
 
 (deftest optional-join-input-present-test
   (testing "Optional join input is included when available"
-    (let [idx (inject/build-index
+    (let [idx (graph/build-index
                [user-by-id
                 user-address
                 {:id       :label-with-address
@@ -379,13 +379,13 @@
                                              (str name " (" zip ")")
                                              name)}))}])]
       (is (= {:user/label "Alice (10001)"}
-             (inject/query {:biff.inject/index idx}
+             (graph/query {:biff.graph/index idx}
                        {:user/id 1}
                        [:user/label]))))))
 
 (deftest optional-join-input-missing-test
   (testing "Optional join input is omitted when not available"
-    (let [idx (inject/build-index
+    (let [idx (graph/build-index
                [{:id       :label-with-address
                  :input    [:user/name {[:? :user/address] [:address/zip]}]
                  :output   [:user/label]
@@ -396,7 +396,7 @@
                                              (str name " (" zip ")")
                                              name)}))}])]
       (is (= {:user/label "Alice"}
-             (inject/query {:biff.inject/index idx}
+             (graph/query {:biff.graph/index idx}
                        {:user/name "Alice"}
                        [:user/label]))))))
 
@@ -440,24 +440,24 @@
       (q {:user/id 1} [:nonexistent/attr])
       (is false "Should have thrown")
       (catch clojure.lang.ExceptionInfo e
-        (is (true? (:com.biffweb.inject/resolve-error (ex-data e))))))))
+        (is (true? (:com.biffweb.graph/resolve-error (ex-data e))))))))
 
 (deftest non-resolve-exceptions-propagate-test
   (testing "Non-resolution exceptions from resolvers are not swallowed"
-    (let [idx (inject/build-index
+    (let [idx (graph/build-index
                [{:id       :throws-runtime
                  :input    [:user/id]
                  :output   [:user/boom]
                  :resolve  (fn [_ _] (throw (ex-info "custom error" {:custom true})))}])]
       (try
-        (inject/query {:biff.inject/index idx} {:user/id 1} [:user/boom])
+        (graph/query {:biff.graph/index idx} {:user/id 1} [:user/boom])
         (is false "Should have thrown")
         (catch clojure.lang.ExceptionInfo e
           ;; The custom exception should propagate (not be swallowed as a resolve error)
           ;; It might be wrapped in a "No resolver found" if the resolver throws non-resolve-error
           ;; and then no other candidate succeeds. Let's verify it gets through.
           (is (or (:custom (ex-data e))
-                  (:com.biffweb.inject/resolve-error (ex-data e)))))))))
+                  (:com.biffweb.graph/resolve-error (ex-data e)))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Batch resolver tests
@@ -498,8 +498,8 @@
 (deftest batch-resolver-basic-test
   (testing "Batch resolver works for sequential join values"
     (reset! batch-call-counts {})
-    (let [idx (inject/build-index [user-friends batch-user-by-id])
-          result (inject/query {:biff.inject/index idx}
+    (let [idx (graph/build-index [user-friends batch-user-by-id])
+          result (graph/query {:biff.graph/index idx}
                            {:user/id 1}
                            [{:user/friends [:user/name]}])]
       (is (= {:user/friends [{:user/name "Bob"} {:user/name "Carol"}]}
@@ -509,8 +509,8 @@
 (deftest batch-resolver-multiple-attrs-test
   (testing "Batch resolver resolves multiple attributes from same resolver"
     (reset! batch-call-counts {})
-    (let [idx (inject/build-index [user-friends batch-user-by-id])
-          result (inject/query {:biff.inject/index idx}
+    (let [idx (graph/build-index [user-friends batch-user-by-id])
+          result (graph/query {:biff.graph/index idx}
                            {:user/id 1}
                            [{:user/friends [:user/name :user/email]}])]
       (is (= {:user/friends [{:user/name "Bob"   :user/email "bob@example.com"}
@@ -520,8 +520,8 @@
 (deftest batch-resolver-different-resolvers-test
   (testing "Multiple batch resolvers for different attrs"
     (reset! batch-call-counts {})
-    (let [idx (inject/build-index [user-friends batch-user-by-id batch-user-age])
-          result (inject/query {:biff.inject/index idx}
+    (let [idx (graph/build-index [user-friends batch-user-by-id batch-user-age])
+          result (graph/query {:biff.graph/index idx}
                            {:user/id 1}
                            [{:user/friends [:user/name :user/age]}])]
       (is (= {:user/friends [{:user/name "Bob"   :user/age 25}
@@ -533,8 +533,8 @@
 (deftest batch-resolver-deeply-nested-test
   (testing "Batch resolvers work with deeply nested joins"
     (reset! batch-call-counts {})
-    (let [idx (inject/build-index [user-friends batch-user-by-id])
-          result (inject/query {:biff.inject/index idx}
+    (let [idx (graph/build-index [user-friends batch-user-by-id])
+          result (graph/query {:biff.graph/index idx}
                            {:user/id 1}
                            [{:user/friends [:user/name {:user/friends [:user/name]}]}])]
       (is (= {:user/friends [{:user/name "Bob"
@@ -546,8 +546,8 @@
 (deftest batch-resolver-cross-tree-test
   (testing "Breadth-first batching: batch resolver called once for ALL grandchildren"
     (reset! batch-call-counts {})
-    (let [idx (inject/build-index [user-friends batch-user-by-id])
-          result (inject/query {:biff.inject/index idx}
+    (let [idx (graph/build-index [user-friends batch-user-by-id])
+          result (graph/query {:biff.graph/index idx}
                            {:user/id 1}
                            [{:user/friends [{:user/friends [:user/name]}]}])]
       ;; User 1's friends are [2, 3]
@@ -564,8 +564,8 @@
 
 (deftest batch-resolver-single-entity-fallback-test
   (testing "Batch resolver works for individual entity resolution (non-join context)"
-    (let [idx (inject/build-index [batch-user-by-id])
-          result (inject/query {:biff.inject/index idx}
+    (let [idx (graph/build-index [batch-user-by-id])
+          result (graph/query {:biff.graph/index idx}
                            {:user/id 1}
                            [:user/name :user/email])]
       (is (= {:user/name "Alice" :user/email "alice@example.com"}
@@ -574,8 +574,8 @@
 (deftest batch-resolver-with-entity-passthrough-test
   (testing "Entities that already have the attr skip batch resolution"
     (reset! batch-call-counts {})
-    (let [idx (inject/build-index [batch-user-by-id])
-          result (inject/query {:biff.inject/index idx}
+    (let [idx (graph/build-index [batch-user-by-id])
+          result (graph/query {:biff.graph/index idx}
                            {:user/id 1 :user/name "Override"}
                            [:user/name])]
       (is (= {:user/name "Override"} result)))))
@@ -583,8 +583,8 @@
 (deftest batch-resolver-mixed-with-non-batch-test
   (testing "Batch and non-batch resolvers coexist in the same index"
     (reset! batch-call-counts {})
-    (let [idx (inject/build-index [user-friends batch-user-by-id user-age])
-          result (inject/query {:biff.inject/index idx}
+    (let [idx (graph/build-index [user-friends batch-user-by-id user-age])
+          result (graph/query {:biff.graph/index idx}
                            {:user/id 1}
                            [{:user/friends [:user/name :user/age]}])]
       (is (= {:user/friends [{:user/name "Bob"   :user/age 25}
@@ -598,18 +598,18 @@
                          :input    [:user/id]
                          :output   [:user/friends]
                          :resolve  (fn [_ctx _input] {:user/friends []})}
-          idx (inject/build-index [empty-friends batch-user-by-id])]
+          idx (graph/build-index [empty-friends batch-user-by-id])]
       (is (= {:user/friends []}
-             (inject/query {:biff.inject/index idx}
+             (graph/query {:biff.graph/index idx}
                        {:user/id 99}
                        [{:user/friends [:user/name]}]))))))
 
 (deftest batch-resolver-with-sub-query-test
   (testing "Batch resolver result can have sub-query applied"
-    (let [idx (inject/build-index [user-friends
+    (let [idx (graph/build-index [user-friends
                                batch-user-by-id
                                user-address])
-          result (inject/query {:biff.inject/index idx}
+          result (graph/query {:biff.graph/index idx}
                            {:user/id 1}
                            [{:user/friends [:user/name {:user/address [:address/zip]}]}])]
       (is (= {:user/friends [{:user/name "Bob"
@@ -620,8 +620,8 @@
 
 (deftest batch-resolver-optional-query-item-test
   (testing "Optional query items work with batch resolution"
-    (let [idx (inject/build-index [user-friends batch-user-by-id])
-          result (inject/query {:biff.inject/index idx}
+    (let [idx (graph/build-index [user-friends batch-user-by-id])
+          result (graph/query {:biff.graph/index idx}
                            {:user/id 1}
                            [{:user/friends [:user/name [:? :nonexistent/attr]]}])]
       (is (= {:user/friends [{:user/name "Bob"} {:user/name "Carol"}]}
@@ -642,14 +642,14 @@
 
 (deftest batch-var-resolver-test
   (testing "Var-based batch resolver reads :batch from metadata"
-    (let [r (inject/resolver #'batch-var-user-by-id)]
+    (let [r (graph/resolver #'batch-var-user-by-id)]
       (is (true? (:batch r)))
-      (is (= :com.biffweb.inject-test/batch-var-user-by-id (:id r))))))
+      (is (= :com.biffweb.graph-test/batch-var-user-by-id (:id r))))))
 
 (deftest batch-var-resolver-query-test
   (testing "Var-based batch resolver works in queries"
-    (let [idx (inject/build-index [user-friends #'batch-var-user-by-id])
-          result (inject/query {:biff.inject/index idx}
+    (let [idx (graph/build-index [user-friends #'batch-var-user-by-id])
+          result (graph/query {:biff.graph/index idx}
                            {:user/id 1}
                            [{:user/friends [:user/name]}])]
       (is (= {:user/friends [{:user/name "Bob"} {:user/name "Carol"}]}
@@ -657,7 +657,7 @@
 
 (deftest batch-resolver-build-index-test
   (testing "build-index preserves :batch flag"
-    (let [idx (inject/build-index [batch-user-by-id user-by-id])]
+    (let [idx (graph/build-index [batch-user-by-id user-by-id])]
       (is (true? (:batch (first (filter :batch (:all-resolvers idx))))))
       (is (false? (:batch (first (remove :batch (:all-resolvers idx)))))))))
 
@@ -667,8 +667,8 @@
 
 (deftest query-with-vector-entities-test
   (testing "query accepts a vector of entity maps and returns a vector of results"
-    (let [idx (inject/build-index [user-by-id])
-          result (inject/query {:biff.inject/index idx}
+    (let [idx (graph/build-index [user-by-id])
+          result (graph/query {:biff.graph/index idx}
                            [{:user/id 1} {:user/id 2} {:user/id 3}]
                            [:user/name])]
       (is (= [{:user/name "Alice"} {:user/name "Bob"} {:user/name "Carol"}]
@@ -676,16 +676,16 @@
 
 (deftest query-with-empty-vector-test
   (testing "query with empty vector returns empty vector"
-    (let [idx (inject/build-index [user-by-id])
-          result (inject/query {:biff.inject/index idx}
+    (let [idx (graph/build-index [user-by-id])
+          result (graph/query {:biff.graph/index idx}
                            []
                            [:user/name])]
       (is (= [] result)))))
 
 (deftest query-with-vector-and-joins-test
   (testing "query with vector entities and joins"
-    (let [idx (inject/build-index [user-by-id user-friends])
-          result (inject/query {:biff.inject/index idx}
+    (let [idx (graph/build-index [user-by-id user-friends])
+          result (graph/query {:biff.graph/index idx}
                            [{:user/id 1} {:user/id 2}]
                            [:user/name {:user/friends [:user/name]}])]
       (is (= [{:user/name "Alice"
@@ -697,8 +697,8 @@
 (deftest query-with-vector-uses-batch-test
   (testing "query with vector entities uses batch resolvers efficiently"
     (reset! batch-call-counts {})
-    (let [idx (inject/build-index [batch-user-by-id])
-          result (inject/query {:biff.inject/index idx}
+    (let [idx (graph/build-index [batch-user-by-id])
+          result (graph/query {:biff.graph/index idx}
                            [{:user/id 1} {:user/id 2} {:user/id 3}]
                            [:user/name])]
       (is (= [{:user/name "Alice"} {:user/name "Bob"} {:user/name "Carol"}]
@@ -715,9 +715,9 @@
             not causing all entities to fail"
     (let [;; Resolver that requires :user/id
           name-resolver batch-user-by-id
-          idx (inject/build-index [name-resolver])
+          idx (graph/build-index [name-resolver])
           ;; Mix of entities: some have :user/id, some have :user/name directly
-          result (inject/query {:biff.inject/index idx}
+          result (graph/query {:biff.graph/index idx}
                            [{:user/id 1} {:user/id 2 :user/name "PresetBob"}]
                            [:user/name])]
       (is (= [{:user/name "Alice"} {:user/name "PresetBob"}]
@@ -752,8 +752,8 @@
                        (case id
                          3 {:user/name "Carol-fallback"}
                          {}))}
-          idx (inject/build-index [partial-resolver fallback-resolver])
-          result (inject/query {:biff.inject/index idx}
+          idx (graph/build-index [partial-resolver fallback-resolver])
+          result (graph/query {:biff.graph/index idx}
                            [{:user/id 1} {:user/id 2} {:user/id 3}]
                            [:user/name])]
       (is (= [{:user/name "Alice"} {:user/name "Bob"} {:user/name "Carol-fallback"}]
@@ -775,9 +775,9 @@
            :output   [:user/name]
            :resolve  (fn [_ctx {:user/keys [email]}]
                        {:user/name (str "EmailUser-" email)})}
-          idx (inject/build-index [by-id-resolver by-email-resolver])
+          idx (graph/build-index [by-id-resolver by-email-resolver])
           ;; Mix: some entities have :user/id, some have :user/email
-          result (inject/query {:biff.inject/index idx}
+          result (graph/query {:biff.graph/index idx}
                            [{:user/id 1} {:user/email "bob@example.com"}]
                            [:user/name])]
       (is (= [{:user/name "User-1"} {:user/name "EmailUser-bob@example.com"}]
@@ -802,8 +802,8 @@
                        (mapv (fn [{:user/keys [name]}]
                                {:user/greeting (str "Hello, " name "!")})
                              inputs))}
-          idx (inject/build-index [user-friends batch-user-by-id greeting-resolver])
-          result (inject/query {:biff.inject/index idx}
+          idx (graph/build-index [user-friends batch-user-by-id greeting-resolver])
+          result (graph/query {:biff.graph/index idx}
                            {:user/id 1}
                            [{:user/friends [:user/greeting]}])]
       (is (= {:user/friends [{:user/greeting "Hello, Bob!"}
@@ -819,7 +819,7 @@
 (deftest cache-non-batch-memoize-test
   (testing "Non-batch resolver is only called once per unique input within a query"
     (let [call-count (atom 0)
-          idx (inject/build-index
+          idx (graph/build-index
                [{:id       :user-name
                  :input    [:user/id]
                  :output   [:user/name]
@@ -827,7 +827,7 @@
                              (swap! call-count inc)
                              {:user/name (str "User-" id)})}
                 user-friends])
-          result (inject/query {:biff.inject/index idx}
+          result (graph/query {:biff.graph/index idx}
                            {:user/id 1}
                            [{:user/friends [:user/name]}])]
       ;; User 1's friends are user 2 and user 3 — two different inputs,
@@ -839,7 +839,7 @@
 (deftest cache-non-batch-duplicate-input-test
   (testing "Non-batch resolver reuses cached result for duplicate inputs across tree levels"
     (let [call-count (atom 0)
-          idx (inject/build-index
+          idx (graph/build-index
                [{:id       :user-name
                  :input    [:user/id]
                  :output   [:user/name]
@@ -853,7 +853,7 @@
           ;; At grandchild level: need :user/name for users 1, 1, 2
           ;; User 2's name was resolved at child level → cached
           ;; User 1's name only needs one actual call (second is cached)
-          result (inject/query {:biff.inject/index idx}
+          result (graph/query {:biff.graph/index idx}
                            {:user/id 1}
                            [{:user/friends [:user/name {:user/friends [:user/name]}]}])]
       (is (= {:user/friends [{:user/name "User-2"
@@ -869,7 +869,7 @@
 (deftest cache-batch-partial-hit-test
   (testing "Batch resolver only sends uncached inputs to the underlying resolver"
     (let [call-log (atom [])
-          idx (inject/build-index
+          idx (graph/build-index
                [{:id       :batch-name
                  :input    [:user/id]
                  :output   [:user/name]
@@ -880,7 +880,7 @@
                                      {:user/name (str "User-" id)})
                                    inputs))}
                 user-friends])
-          result (inject/query {:biff.inject/index idx}
+          result (graph/query {:biff.graph/index idx}
                            {:user/id 1}
                            [{:user/friends [:user/name {:user/friends [:user/name]}]}])]
       (is (= {:user/friends [{:user/name "User-2"
@@ -896,7 +896,7 @@
 (deftest cache-batch-all-cached-test
   (testing "Batch resolver is not called when all inputs are cached"
     (let [call-count (atom 0)
-          idx (inject/build-index
+          idx (graph/build-index
                [{:id       :batch-name
                  :input    [:user/id]
                  :output   [:user/name]
@@ -917,7 +917,7 @@
                                {:user/friends []}))}])
           ;; Query: resolve name for user 1, then resolve friends (user 2),
           ;; then resolve name for user 2's friends (user 1, which is already cached)
-          result (inject/query {:biff.inject/index idx}
+          result (graph/query {:biff.graph/index idx}
                            {:user/id 1}
                            [:user/name {:user/friends [:user/name {:user/friends [:user/name]}]}])]
       (is (= {:user/name "User-1"
@@ -931,23 +931,23 @@
 (deftest cache-per-query-isolation-test
   (testing "Cache is fresh per query call — no cross-query caching"
     (let [call-count (atom 0)
-          idx (inject/build-index
+          idx (graph/build-index
                [{:id       :counting-resolver
                  :input    [:user/id]
                  :output   [:user/name]
                  :resolve  (fn [_ctx {:user/keys [id]}]
                              (swap! call-count inc)
                              {:user/name (str "User-" id)})}])]
-      (inject/query {:biff.inject/index idx} {:user/id 1} [:user/name])
+      (graph/query {:biff.graph/index idx} {:user/id 1} [:user/name])
       (is (= 1 @call-count))
       ;; Second query with same input — cache is fresh, so resolver called again
-      (inject/query {:biff.inject/index idx} {:user/id 1} [:user/name])
+      (graph/query {:biff.graph/index idx} {:user/id 1} [:user/name])
       (is (= 2 @call-count)))))
 
 (deftest cache-nil-result-test
   (testing "Cached results with nil values are still returned from cache"
     (let [call-count (atom 0)
-          idx (inject/build-index
+          idx (graph/build-index
                [{:id       :nil-resolver
                  :input    [:user/id]
                  :output   [:user/nickname]
@@ -960,7 +960,7 @@
                  :resolve  (fn [_ctx {:user/keys [id]}]
                              {:user/friends [{:user/id id}]})}])
           ;; Query nickname at top level, then again in a join
-          result (inject/query {:biff.inject/index idx}
+          result (graph/query {:biff.graph/index idx}
                            {:user/id 1}
                            [:user/nickname {:user/friends [:user/nickname]}])]
       (is (= {:user/nickname nil
@@ -972,7 +972,7 @@
 (deftest cache-global-resolver-test
   (testing "Global resolvers (no input) are cached within a query"
     (let [call-count (atom 0)
-          idx (inject/build-index
+          idx (graph/build-index
                [{:id       :counting-global
                  :input    []
                  :output   [:user/id]
@@ -984,7 +984,7 @@
                  :output   [:user/name]
                  :resolve  (fn [_ctx {:user/keys [id]}]
                              {:user/name (str "User-" id)})}])
-          result (inject/query {:biff.inject/index idx}
+          result (graph/query {:biff.graph/index idx}
                            [{} {}]
                            [:user/name])]
       (is (= [{:user/name "User-42"} {:user/name "User-42"}] result))

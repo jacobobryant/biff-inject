@@ -1,4 +1,4 @@
-# biff-inject (alpha)
+# biff-graph (alpha)
 
 NOTE: this whole thing so far has been entirely ai-generated (except for this paragraph). I need to make a pass over it before it's ready to be officially released.
 
@@ -29,7 +29,7 @@ This library provides a minimal resolver-based data fetching engine that support
 Add to your `deps.edn`:
 
 ```clojure
-{:deps {com.biffweb/inject {:git/url "https://github.com/jacobobryant/biff-inject"
+{:deps {com.biffweb/graph {:git/url "https://github.com/jacobobryant/biff.graph"
                                   :git/sha "..."}}}
 ```
 
@@ -38,7 +38,7 @@ Add to your `deps.edn`:
 Define resolvers as regular functions with metadata:
 
 ```clojure
-(require '[com.biffweb.inject :as biff.inject])
+(require '[com.biffweb.graph :as biff.graph])
 
 (defn user-by-id
   {:input [:user/id]
@@ -57,13 +57,13 @@ Define resolvers as regular functions with metadata:
 ### Build an index
 
 ```clojure
-(def index (biff.inject/build-index [#'user-by-id #'user-friends]))
+(def index (biff.graph/build-index [#'user-by-id #'user-friends]))
 ```
 
 ### Run a query
 
 ```clojure
-(biff.inject/query {:biff.inject/index index}
+(biff.graph/query {:biff.graph/index index}
                {:user/id 1}
                [:user/name {:user/friends [:user/name]}])
 ;; => {:user/name "Alice"
@@ -97,7 +97,7 @@ You can also mark query items as optional. When a query item can't be resolved,
 it is simply omitted from the result instead of throwing:
 
 ```clojure
-(biff.inject/query {:biff.inject/index index}
+(biff.graph/query {:biff.graph/index index}
                {:user/id 1}
                [:user/name [:? :user/nickname]])
 ;; => {:user/name "Alice"}  ; :user/nickname omitted if no resolver
@@ -157,7 +157,7 @@ You can also define resolvers as plain maps:
    :output  [:some/output]
    :resolve (fn [ctx input] {:some/output "value"})})
 
-(def index (biff.inject/build-index [my-resolver]))
+(def index (biff.graph/build-index [my-resolver]))
 ```
 
 ### Batch querying (vector of entities)
@@ -167,7 +167,7 @@ a vector, it returns a vector of result maps — and uses batch resolvers to pro
 all entities efficiently:
 
 ```clojure
-(biff.inject/query {:biff.inject/index index}
+(biff.graph/query {:biff.graph/index index}
                [{:user/id 1} {:user/id 2} {:user/id 3}]
                [:user/name])
 ;; => [{:user/name "Alice"} {:user/name "Bob"} {:user/name "Carol"}]
@@ -177,11 +177,11 @@ all entities efficiently:
 
 | Function            | Description                                                     |
 |--------------------|-----------------------------------------------------------------|
-| `biff.inject/build-index` | Build an index from a collection of resolvers (vars or maps) |
-| `biff.inject/query`       | Run an EQL query: `(query ctx entity-or-entities query-vec)`  |
-| `biff.inject/resolver`    | Normalize a resolver (var or map) into a resolver map         |
+| `biff.graph/build-index` | Build an index from a collection of resolvers (vars or maps) |
+| `biff.graph/query`       | Run an EQL query: `(query ctx entity-or-entities query-vec)`  |
+| `biff.graph/resolver`    | Normalize a resolver (var or map) into a resolver map         |
 
-The context map (`ctx`) passed to `query` must include `:biff.inject/index`
+The context map (`ctx`) passed to `query` must include `:biff.graph/index`
 (the result of `build-index`). Any other keys in ctx are passed through to resolver
 functions.
 

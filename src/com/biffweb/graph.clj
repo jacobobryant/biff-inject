@@ -1,4 +1,4 @@
-(ns com.biffweb.inject
+(ns com.biffweb.graph
   "A lightweight implementation of pathom-style resolvers.
 
   Supports:
@@ -119,14 +119,14 @@
 
 (defn- wrap-caching
   "Wrap a resolver's :resolve function with per-query caching.
-  The cache is an atom stored in ctx under :biff.inject/cache.
+  The cache is an atom stored in ctx under :biff.graph/cache.
   For non-batch resolvers, acts like memoize keyed on the input map.
   For batch resolvers, checks each input element individually and only
   sends unique uncached inputs to the underlying resolver."
   [{:keys [id batch resolve]}]
   (if batch
     (fn [ctx inputs]
-      (if-let [cache (:biff.inject/cache ctx)]
+      (if-let [cache (:biff.graph/cache ctx)]
         (let [resolver-cache (get @cache id {})
               uncached-idxs (vec (keep (fn [i] (when-not (contains? resolver-cache (nth inputs i)) i))
                                        (range (count inputs))))
@@ -145,7 +145,7 @@
               (mapv #(get updated-cache %) inputs))))
         (resolve ctx inputs)))
     (fn [ctx input]
-      (if-let [cache (:biff.inject/cache ctx)]
+      (if-let [cache (:biff.graph/cache ctx)]
         (let [resolver-cache (get @cache id)]
           (if (and resolver-cache (contains? resolver-cache input))
             (get resolver-cache input)
@@ -158,7 +158,7 @@
   "Build an index from a collection of resolvers (maps or vars).
   Calls `resolver` on each item and wraps each resolver's :resolve function
   with caching logic. When a cache atom is present in the query context
-  (under :biff.inject/cache), resolved results are memoized per input.
+  (under :biff.graph/cache), resolved results are memoized per input.
   Returns a map with:
     :resolvers-by-output  {attr-key [resolver ...]}
     :all-resolvers        [resolver ...]"
@@ -186,7 +186,7 @@
 (defn- find-resolver-candidates
   "Find all resolvers that can provide `attr`."
   [ctx attr]
-  (get-in (:biff.inject/index ctx) [:resolvers-by-output attr]))
+  (get-in (:biff.graph/index ctx) [:resolvers-by-output attr]))
 
 (defn- ensure-join-value
   "Validate that a value is suitable for a join (map or sequential of maps).
@@ -375,7 +375,7 @@
   "Run an EQL query using the provided resolver index.
 
   Arguments:
-    ctx    - context map; must include :biff.inject/index (from build-index).
+    ctx    - context map; must include :biff.graph/index (from build-index).
              Any other keys are passed through to resolver functions.
     entity - initial entity map with seed data (or {}), or a vector of entity maps
              for batch querying.
@@ -385,8 +385,8 @@
   Returns a map satisfying the query when given a single entity,
   or a vector of maps when given a vector of entities.
   Throws ExceptionInfo if any required attribute cannot be resolved."
-  [{:keys [biff.inject/index] :as ctx} entity-or-entities query-vec]
-  (let [ctx (assoc ctx :biff.inject/cache (atom {}))
+  [{:keys [biff.graph/index] :as ctx} entity-or-entities query-vec]
+  (let [ctx (assoc ctx :biff.graph/cache (atom {}))
         is-vec? (sequential? entity-or-entities)
         entities (if is-vec? (vec entity-or-entities) [(or entity-or-entities {})])
         results (process-entities ctx entities query-vec #{})]
