@@ -990,3 +990,23 @@
       (is (= [{:user/name "User-42"} {:user/name "User-42"}] result))
       ;; Global resolver called once, result reused for second entity
       (is (= 1 @call-count)))))
+
+;; ---------------------------------------------------------------------------
+;; 2-arity query tests (entity-or-entities omitted)
+;; ---------------------------------------------------------------------------
+
+(deftest query-2-arity-global-resolver-test
+  (testing "2-arity query uses global resolvers with default empty entity"
+    (is (= {:user/id 1 :user/name "Alice"}
+           (graph/query {:biff.graph/index index :current-user-id 1}
+                        [:user/id :user/name])))))
+
+(deftest query-2-arity-empty-query-test
+  (testing "2-arity query with empty query returns empty map"
+    (is (= {} (graph/query {:biff.graph/index index} [])))))
+
+(deftest query-2-arity-chained-resolvers-test
+  (testing "2-arity query chains global resolvers with downstream resolvers"
+    (is (= {:user/id 2 :user/name "Bob" :user/email "bob@example.com"}
+           (graph/query {:biff.graph/index index :current-user-id 2}
+                        [:user/id :user/name :user/email])))))

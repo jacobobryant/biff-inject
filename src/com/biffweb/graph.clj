@@ -377,24 +377,26 @@
   Arguments:
     ctx    - context map; must include :biff.graph/index (from build-index).
              Any other keys are passed through to resolver functions.
-    entity - initial entity map with seed data (or {}), or a vector of entity maps
-             for batch querying.
+    entity - (optional) initial entity map with seed data, or a vector of entity
+             maps for batch querying. Defaults to {} if omitted.
     query  - EQL query vector, e.g. [:user/name {:user/friends [:user/name]}]
              Supports optional items via [:? :attr] syntax.
 
   Returns a map satisfying the query when given a single entity,
   or a vector of maps when given a vector of entities.
   Throws ExceptionInfo if any required attribute cannot be resolved."
-  [{:keys [biff.graph/index] :as ctx} entity-or-entities query-vec]
-  (let [ctx (assoc ctx :biff.graph/cache (atom {}))
-        is-vec? (sequential? entity-or-entities)
-        entities (if is-vec? (vec entity-or-entities) [(or entity-or-entities {})])
-        results (process-entities ctx entities query-vec #{})]
-    (doseq [r results]
-      (when (unresolved-result? r)
-        (throw (ex-info (str "No resolver found for attribute " (::failed-attr r)
-                             " with available inputs " (::available-keys r))
-                        {::resolve-error true
-                         :attr (::failed-attr r)
-                         :available-keys (::available-keys r)}))))
-    (if is-vec? results (first results))))
+  ([ctx query-vec]
+   (query ctx {} query-vec))
+  ([{:keys [biff.graph/index] :as ctx} entity-or-entities query-vec]
+   (let [ctx (assoc ctx :biff.graph/cache (atom {}))
+         is-vec? (sequential? entity-or-entities)
+         entities (if is-vec? (vec entity-or-entities) [(or entity-or-entities {})])
+         results (process-entities ctx entities query-vec #{})]
+     (doseq [r results]
+       (when (unresolved-result? r)
+         (throw (ex-info (str "No resolver found for attribute " (::failed-attr r)
+                              " with available inputs " (::available-keys r))
+                         {::resolve-error true
+                          :attr (::failed-attr r)
+                          :available-keys (::available-keys r)}))))
+     (if is-vec? results (first results)))))
