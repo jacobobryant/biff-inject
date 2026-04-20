@@ -159,13 +159,21 @@
   Calls `resolver` on each item and wraps each resolver's :resolve function
   with caching logic. When a cache atom is present in the query context
   (under :biff.graph/cache), resolved results are memoized per input.
+
+  Accepts optional keyword arguments:
+    :middleware - a vector of functions (fn [resolver-map] -> resolver-map)
+                  applied after resolvers are converted to maps but before
+                  building the :resolvers-by-output index.
+
   Returns a map with:
     :resolvers-by-output  {attr-key [resolver ...]}
     :all-resolvers        [resolver ...]"
-  [resolvers]
-  (let [resolvers (mapv (fn [r]
-                          (let [r (resolver r)]
-                            (assoc r :resolve (wrap-caching r))))
+  [resolvers & {:keys [middleware]}]
+  (let [resolvers (mapv resolver resolvers)
+        resolvers (reduce (fn [rs mw] (mapv mw rs))
+                          resolvers
+                          middleware)
+        resolvers (mapv (fn [r] (assoc r :resolve (wrap-caching r)))
                         resolvers)]
     {:resolvers-by-output
      (reduce (fn [idx r]
