@@ -117,6 +117,22 @@
     (is (= {:user/name "Bob" :user/age 25}
            (q {:user/id 2} [:user/name :user/age])))))
 
+(deftest get-index-test
+  (let [modules-var (atom [{:biff.graph/resolvers [user-by-id]}])
+        middleware-var (atom [])
+        get-index (:biff.graph/get-index
+                   ((:biff/init (graph/module {:middleware-var middleware-var}))
+                    modules-var))
+        index-1 (get-index)
+        index-2 (get-index)]
+    (is (= {:user/name "Alice"}
+           (graph/query {:biff.graph/get-index get-index}
+                        {:user/id 1}
+                        [:user/name])))
+    (is (identical? index-1 index-2))
+    (reset! middleware-var [(fn [resolver] resolver)])
+    (is (not (identical? index-1 (get-index))))))
+
 (deftest global-resolver-test
   (testing "Global resolver (no input) provides seed data"
     (is (= {:user/id 1 :user/name "Alice"}

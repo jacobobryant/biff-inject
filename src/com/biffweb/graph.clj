@@ -181,9 +181,27 @@
                          (update idx k (fnil conj []) r))
                        idx
                        (:output r)))
-             {}
-             resolvers)
-     :all-resolvers resolvers}))
+              {}
+              resolvers)
+      :all-resolvers resolvers}))
+
+(def ^:private index-for-inputs
+  (memoize
+   (fn [modules middleware]
+     (apply build-index
+            (mapcat :biff.graph/resolvers modules)
+            (cond-> []
+              middleware (conj :middleware middleware))))))
+
+(defn module
+  [{:keys [middleware-var]}]
+  {:biff/init
+   (fn [modules-var]
+     {:biff.graph/get-index
+      (fn []
+        (index-for-inputs @modules-var
+                          (when middleware-var
+                            @middleware-var)))})})
 
 ;; ---------------------------------------------------------------------------
 ;; Query engine
@@ -194,7 +212,10 @@
 (defn- find-resolver-candidates
   "Find all resolvers that can provide `attr`."
   [ctx attr]
-  (get-in (:biff.graph/index ctx) [:resolvers-by-output attr]))
+  (get-in (or (:biff.graph/index ctx)
+              (when-some [get-index (:biff.graph/get-index ctx)]
+                (get-index)))
+          [:resolvers-by-output attr]))
 
 (defn- ensure-join-value
   "Validate that a value is suitable for a join (map or sequential of maps).
@@ -395,11 +416,16 @@
   Throws ExceptionInfo if any required attribute cannot be resolved."
   ([ctx query-vec]
    (query ctx {} query-vec))
-  ([{:keys [biff.graph/index] :as ctx} entity-or-entities query-vec]
-   (let [ctx (assoc ctx :biff.graph/cache (atom {}))
-         is-vec? (sequential? entity-or-entities)
-         entities (if is-vec? (vec entity-or-entities) [(or entity-or-entities {})])
-         results (process-entities ctx entities query-vec #{})]
+  ([{:keys [biff.graph/index biff.graph/get-index] :as ctx} entity-or-entities query-vec]
+   (let [index (or index
+                   (when get-index
+                     (get-index)))
+         ctx (assoc ctx
+                    :biff.graph/index index
+                    :biff.graph/cache (atom {}))
+          is-vec? (sequential? entity-or-entities)
+          entities (if is-vec? (vec entity-or-entities) [(or entity-or-entities {})])
+          results (process-entities ctx entities query-vec #{})]
      (doseq [r results]
        (when (unresolved-result? r)
          (throw (ex-info (str "No resolver found for attribute " (::failed-attr r)
