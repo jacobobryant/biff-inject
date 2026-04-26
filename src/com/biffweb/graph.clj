@@ -185,23 +185,22 @@
               resolvers)
       :all-resolvers resolvers}))
 
-(def ^:private index-for-inputs
+(def ^:private index-for-modules
   (memoize
-   (fn [modules middleware]
-     (apply build-index
-            (mapcat :biff.graph/resolvers modules)
-            (cond-> []
-              middleware (conj :middleware middleware))))))
+   (fn [modules]
+     (let [middleware (not-empty (vec (mapcat :biff.graph/middleware modules)))]
+       (apply build-index
+              (mapcat :biff.graph/resolvers modules)
+              (cond-> []
+                middleware (conj :middleware middleware)))))))
 
 (defn module
   []
   {:biff/init
    (fn [modules-var]
-      {:biff.graph/get-index
-       (fn []
-         (index-for-inputs
-          @modules-var
-          (not-empty (vec (mapcat :biff.graph/middleware @modules-var)))))})})
+     {:biff.graph/get-index
+      (fn []
+        (index-for-modules @modules-var))})})
 
 ;; ---------------------------------------------------------------------------
 ;; Query engine
