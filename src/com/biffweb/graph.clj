@@ -196,11 +196,11 @@
 
 (defn module
   []
-  {:biff/init
+  {:biff.core/init
    (fn [modules-var]
-     {:biff.graph/get-index
-      (fn []
-        (index-for-modules @modules-var))})})
+      {:biff.graph/get-index
+       (fn []
+         (index-for-modules @modules-var))})})
 
 ;; ---------------------------------------------------------------------------
 ;; Query engine

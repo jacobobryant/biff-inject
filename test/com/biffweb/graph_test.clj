@@ -118,10 +118,10 @@
            (q {:user/id 2} [:user/name :user/age])))))
 
 (deftest get-index-test
-  (let [modules-var (atom [{:biff.graph/resolvers [user-by-id]}])
+      (let [modules-var (atom [{:biff.graph/resolvers [user-by-id]}])
         get-index (:biff.graph/get-index
-                   ((:biff/init (graph/module))
-                    modules-var))
+                   ((:biff.core/init (graph/module))
+                     modules-var))
         index-1 (get-index)
         index-2 (get-index)]
     (is (= {:user/name "Alice"}
