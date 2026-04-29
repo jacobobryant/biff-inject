@@ -189,11 +189,18 @@
 (def ^:private index-for-modules
   (memoize
    (fn [modules]
-     (let [middleware (not-empty (vec (mapcat :biff.graph/middleware modules)))]
-       (apply build-index
-              (mapcat :biff.graph/resolvers modules)
-              (cond-> []
-                middleware (conj :middleware middleware)))))))
+      (let [middleware (not-empty (vec (mapcat :biff.graph/middleware modules)))]
+        (apply build-index
+               (mapcat :biff.graph/resolvers modules)
+               (cond-> []
+                 middleware (conj :middleware middleware)))))))
+
+(declare query)
+
+(def fx-handlers
+  {:biff.graph.fx/query
+   (fn [ctx & args]
+     (apply query ctx args))})
 
 (defn module
   []
@@ -201,7 +208,8 @@
    (fn [modules-var]
       {:biff.graph/get-index
        (fn []
-         (index-for-modules @modules-var))})})
+         (index-for-modules @modules-var))
+       :biff.fx/handlers fx-handlers})})
 
 (defmacro defresolver
   "Defines a resolver backed by a biff.fx machine.
@@ -457,7 +465,3 @@
                            :attr (::failed-attr r)
                            :available-keys (::available-keys r)}))))
       (if is-vec? results (first results)))))
-
-(defmethod fx/handle :biff.graph.fx/query
-  [_fx-key ctx & args]
-  (apply query ctx args))
