@@ -189,27 +189,13 @@
 (def ^:private index-for-modules
   (memoize
    (fn [modules]
-      (let [middleware (not-empty (vec (mapcat :biff.graph/middleware modules)))]
-        (apply build-index
-               (mapcat :biff.graph/resolvers modules)
-               (cond-> []
-                 middleware (conj :middleware middleware)))))))
+       (let [middleware (not-empty (vec (mapcat :biff.graph/middleware modules)))]
+         (apply build-index
+                (mapcat :biff.graph/resolvers modules)
+                (cond-> []
+                  middleware (conj :middleware middleware)))))))
 
 (declare query)
-
-(def fx-handlers
-  {:biff.graph.fx/query
-   (fn [ctx & args]
-     (apply query ctx args))})
-
-(defn module
-  []
-  {:biff.core/init
-   (fn [modules-var]
-      {:biff.graph/get-index
-       (fn []
-         (index-for-modules @modules-var))
-       :biff.fx/handlers fx-handlers})})
 
 (defmacro defresolver
   "Defines a resolver backed by a biff.fx machine.
@@ -231,9 +217,8 @@
        (defn ~sym
          ~(merge (when (seq input) {:input input})
                  {:output output})
-         [ctx# input#]
-         (machine# (assoc ctx# :biff.fx/resolver-input input#))))))
-
+          [ctx# input#]
+          (machine# (assoc ctx# :biff.fx/resolver-input input#))))))
 ;; ---------------------------------------------------------------------------
 ;; Query engine
 ;; ---------------------------------------------------------------------------
@@ -451,17 +436,29 @@
    (let [index (or index
                    (when get-index
                      (get-index)))
-         ctx (assoc ctx
-                    :biff.graph/index index
-                    :biff.graph/cache (atom {}))
+          ctx (assoc ctx
+                     :biff.graph/index index
+                     :biff.graph/cache (atom {}))
           is-vec? (sequential? entity-or-entities)
           entities (if is-vec? (vec entity-or-entities) [(or entity-or-entities {})])
           results (process-entities ctx entities query-vec #{})]
-      (doseq [r results]
-        (when (unresolved-result? r)
-          (throw (ex-info (str "No resolver found for attribute " (::failed-attr r)
+     (doseq [r results]
+       (when (unresolved-result? r)
+         (throw (ex-info (str "No resolver found for attribute " (::failed-attr r)
                                " with available inputs " (::available-keys r))
-                          {::resolve-error true
-                           :attr (::failed-attr r)
-                           :available-keys (::available-keys r)}))))
-      (if is-vec? results (first results)))))
+                           {::resolve-error true
+                            :attr (::failed-attr r)
+                            :available-keys (::available-keys r)}))))
+     (if is-vec? results (first results)))))
+
+(def fx-handlers
+  {:biff.graph.fx/query #'query})
+
+(defn module
+  []
+  {:biff.core/init
+   (fn [modules-var]
+     {:biff.graph/get-index
+      (fn []
+        (index-for-modules @modules-var))})
+   :biff.fx/handlers fx-handlers})
