@@ -119,10 +119,10 @@
            (q {:user/id 2} [:user/name :user/age])))))
 
 (deftest get-index-test
-      (let [modules-var (atom [{:biff.graph/resolvers [user-by-id]}])
+  (let [modules-var (atom [{:biff.graph/resolvers [user-by-id]}])
         get-index (:biff.graph/get-index
                    ((:biff.core/init (graph/module))
-                     modules-var))
+                    modules-var))
         index-1 (get-index)
         index-2 (get-index)]
     (is (= {:user/name "Alice"}
@@ -130,15 +130,19 @@
                         {:user/id 1}
                         [:user/name])))
     (is (identical? index-1 index-2))
-     (swap! modules-var conj {:biff.graph/middleware [(fn [resolver] resolver)]})
-     (is (not (identical? index-1 (get-index))))))
+    (swap! modules-var conj {:biff.graph/middleware [(fn [resolver] resolver)]})
+    (is (not (identical? index-1 (get-index))))))
+
+(deftest module-exposes-query-fx-handler
+  (is (= {:biff.graph.fx/query #'graph/query}
+         (:biff.fx/handlers (graph/module)))))
 
 (deftest handle-query-effect-test
   (is (= {:user/name "Alice"}
-         (fx/handle :biff.graph.fx/query
-                    {:biff.graph/index index}
-                    {:user/id 1}
-                    [:user/name]))))
+         ((:biff.graph.fx/query graph/fx-handlers)
+          {:biff.graph/index index}
+          {:user/id 1}
+          [:user/name]))))
 
 (graph/defresolver test-resolver
   {:input [:x]
